@@ -13,3 +13,11 @@ pub struct Page {
 pub struct WeekPage {
     pub pages: Vec<Page>,
 }
+
+impl WeekPage {
+    pub fn new() -> Self {
+        Self {
+            pages: Vec::new(),
+        }
+    }
+}
