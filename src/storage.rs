@@ -79,7 +79,8 @@ pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>, failure::Error> {
     'a: for entry in entries {
         let file = File::open(entry.path())?;
 
-        let week_page: WeekPage = serde_json::from_reader(file)?;
+        let mut week_page: WeekPage = serde_json::from_reader(file)?;
+        week_page.pages.sort_by_key(|page| Reverse(page.created_at));
         for page in week_page.pages {
             if count >= limit {
                 break 'a;
