@@ -4,6 +4,7 @@ extern crate serde_derive;
 mod page;
 mod storage;
 mod config;
+mod commands;
 
 use std::env;
 use std::path::{Path};
@@ -11,15 +12,14 @@ use std::io::Read;
 use std::fs::File;
 use std::fs;
 use std::process;
-use chrono;
+use std::collections::HashMap;
 use clap::{Arg, App, SubCommand};
 use toml;
 use config::Config;
 
 const CONFIG_FILE: &str = "config.toml";
 
-fn load_config(directory: &Path) -> Result<Config, String> {
-    let config_file_path = directory.join(CONFIG_FILE);
+fn load_config(config_file_path: &Path) -> Result<Config, String> {
     if !config_file_path.exists() {
         return Ok(Config::default());
     }
@@ -40,7 +40,8 @@ fn main() {
     }
 
     // 設定ファイルを読み込む
-    let config = match load_config(&directory) {
+    let config_file_path = directory.join(CONFIG_FILE);
+    let config = match load_config(&config_file_path) {
         Ok(config) => config,
         Err(err) => {
             println!("設定ファイルの読み込みに失敗しました: {}", err);
@@ -48,5 +49,25 @@ fn main() {
         },
     };
 
-    println!("{:?}", config);
+    let matches = App::new("diary2")
+        .version("1.0")
+        .subcommand(SubCommand::with_name("config")
+                    .about("edit config")
+                    .arg(Arg::with_name("editor")
+                         .takes_value(true)
+                         .long("editor")
+                         .short("e")))
+        .get_matches();
+
+    let mut commands = HashMap::new();
+    commands.insert("config", commands::config);
+
+    for (name, func) in commands {
+        if let Some(sub_matches) = matches.subcommand_matches(name) {
+            if let Err(_) = func(commands::Context::new(&directory, &config_file_path, config, &matches, sub_matches)) {
+                std::process::exit(1);
+            }
+            break;
+        }
+    }
 }
