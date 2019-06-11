@@ -57,10 +57,17 @@ fn main() {
                          .takes_value(true)
                          .long("editor")
                          .short("e")))
+        .subcommand(SubCommand::with_name("list")
+                    .alias("ls")
+                    .arg(Arg::with_name("limit")
+                         .takes_value(true)
+                         .long("limit")
+                         .short("l")))
         .get_matches();
 
-    let mut commands = HashMap::new();
+    let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> = HashMap::new();
     commands.insert("config", commands::config);
+    commands.insert("list", commands::list);
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {

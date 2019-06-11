@@ -4,6 +4,7 @@ use failure;
 use std::process::Command;
 
 use crate::config::Config;
+use crate::storage;
 
 pub struct Context<'a> {
     directory: PathBuf,
@@ -49,6 +50,33 @@ pub fn config(ctx: Context) -> Result<(), failure::Error> {
     if let Err(err) = execute_editor(editor, &ctx.config_path) {
         eprintln!("エディタの起動に失敗しました: {}", err);
         return Err(err);
+    }
+
+    Ok(())
+}
+
+pub fn list(ctx: Context) -> Result<(), failure::Error> {
+    let limit = match ctx.subcommand_matches.value_of("limit") {
+        Some(limit) => match limit.parse::<u32>() {
+            Ok(limit) => limit,
+            Err(err) => {
+                eprintln!("--limitの値が数値ではありません");
+                return Err(From::from(err));
+            },
+        },
+        None => ctx.config.default_list_limit,
+    };
+
+    let pages = match storage::list(&ctx.directory, limit) {
+        Ok(pages) => pages,
+        Err(err) => {
+            eprintln!("ページの取得に失敗しました: {}", err);
+            return Err(From::from(err));
+        },
+    };
+
+    for page in pages {
+        println!("{} ({})", page.title, page.created_at.format("%Y/%m/%d %H:%M"));
     }
 
     Ok(())
