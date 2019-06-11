@@ -1,10 +1,13 @@
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use clap::{ArgMatches};
 use failure;
-use std::process::Command;
+use chrono::{Utc};
 
 use crate::config::Config;
 use crate::storage;
+use crate::page::Page;
 
 pub struct Context<'a> {
     directory: PathBuf,
@@ -77,6 +80,67 @@ pub fn list(ctx: Context) -> Result<(), failure::Error> {
 
     for page in pages {
         println!("{} ({})", page.title, page.created_at.format("%Y/%m/%d %H:%M"));
+    }
+
+    Ok(())
+}
+
+pub fn new(ctx: Context) -> Result<(), failure::Error> {
+    let temp_file_path = ctx.directory.join(TEMP_FILE_TO_EDIT);
+
+    // listコマンドで表示するかどうか
+    let hidden = ctx.subcommand_matches.is_present("hidden");
+    // エディタを起動する前の時刻を保存
+    let created_at = Utc::now();
+
+    // エディタを起動
+    if let Err(err) = execute_editor(&ctx.config.editor, &temp_file_path) {
+        eprintln!("エディタの起動に失敗しました: {}", err);
+        return Err(err);
+    }
+
+    // エディタで編集されたファイルを読み込む
+    let text = match fs::read_to_string(&temp_file_path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("ファイルの読み込みに失敗しました: {}", err);
+            return Err(From::from(err));
+        },
+    };
+
+    let mut iter = text.chars();
+
+    // 最初の行をタイトルとして取得する
+    let title: String = iter.by_ref().take_while(|&ch| ch != '\n').collect();
+    let title = title.trim();
+    // 本文
+    let text: String = iter.collect();
+    let text = text.trim();
+
+    // 取得したタイトルが空だったらエラー
+    if title.is_empty() {
+        eprintln!("タイトルを取得できませんでした");
+        return Ok(());
+    }
+
+    let page = Page {
+        title: title.to_string(),
+        text: text.to_string(),
+        hidden,
+        created_at,
+        updated_at: vec![Utc::now()],
+    };
+
+    // 書き込み
+    if let Err(err) = storage::write(&ctx.directory, page) {
+        eprintln!("ページの書き込みに失敗しました: {}", err);
+        return Err(From::from(err));
+    }
+
+    // ファイルを削除
+    if let Err(err) = fs::remove_file(&temp_file_path) {
+        eprintln!("ファイルの削除に失敗しました: {}", err);
+        return Err(From::from(err));
     }
 
     Ok(())

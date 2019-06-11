@@ -38,6 +38,13 @@ fn generate_page_filepath(directory: &Path, date: Date<Utc>) -> PathBuf {
 pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
     let filepath = generate_page_filepath(directory, Utc::today());
 
+    // なぜか追記される
+    // let file = OpenOptions::new()
+    //     .read(true)
+    //     .write(true)
+    //     .create(true)
+    //     .open(&filepath)?;
+
     let exists = filepath.exists();
     let mut week_page = if exists {
         // ファイルが存在したら今週のページを読み込む

@@ -63,11 +63,16 @@ fn main() {
                          .takes_value(true)
                          .long("limit")
                          .short("l")))
+        .subcommand(SubCommand::with_name("new")
+                    .arg(Arg::with_name("hidden")
+                         .long("hidden")
+                         .short("d")))
         .get_matches();
 
     let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> = HashMap::new();
     commands.insert("config", commands::config);
     commands.insert("list", commands::list);
+    commands.insert("new", commands::new);
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {
