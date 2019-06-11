@@ -78,7 +78,7 @@ pub fn list(ctx: Context) -> Result<(), failure::Error> {
         },
     };
 
-    for page in pages {
+    for page in pages.into_iter().filter(|page| !page.hidden) {
         println!("{} ({})", page.title, page.created_at.format("%Y/%m/%d %H:%M"));
     }
 
