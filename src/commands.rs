@@ -145,3 +145,24 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
 
     Ok(())
 }
+
+pub fn lastdt(ctx: Context) -> Result<(), failure::Error>{ 
+    // 最新のページを取得
+    let last_page: Page = match storage::list(&ctx.directory, 1) {
+        Ok(pages) => match pages.into_iter().next() {
+            Some(page) => page,
+            None => {
+                eprintln!("ページがありません");
+                return Ok(());
+            },
+        },
+        Err(err) => {
+            eprintln!("ページの取得に失敗しました: {}", err);
+            return Err(From::from(err));
+        },
+    };
+
+    println!("{}", last_page.created_at.to_rfc3339());
+
+    Ok(())
+}
