@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use clap::{ArgMatches};
 use failure;
-use chrono::{Utc};
+use chrono::{Utc, Local};
 
 use crate::config::Config;
 use crate::storage;
@@ -79,7 +79,8 @@ pub fn list(ctx: Context) -> Result<(), failure::Error> {
     };
 
     for page in pages.into_iter().filter(|page| !page.hidden) {
-        println!("{} ({})", page.title, page.created_at.format("%Y/%m/%d %H:%M"));
+        let local = page.created_at.with_timezone(&Local);
+        println!("{} ({})", page.title, local.format("%Y/%m/%d %H:%M"));
     }
 
     Ok(())
