@@ -68,6 +68,9 @@ fn main() {
                          .long("hidden")
                          .short("d")))
         .subcommand(SubCommand::with_name("lastdt"))
+        .subcommand(SubCommand::with_name("show")
+                    .arg(Arg::with_name("date")
+                         .index(1)))
         .get_matches();
 
     let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> = HashMap::new();
@@ -75,6 +78,7 @@ fn main() {
     commands.insert("list", commands::list);
     commands.insert("new", commands::new);
     commands.insert("lastdt", commands::lastdt);
+    commands.insert("show", commands::show);
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {

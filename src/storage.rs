@@ -2,15 +2,15 @@ use std::path::{Path, PathBuf};
 use std::fs::{File, DirEntry};
 use std::cmp::Reverse;
 use crate::page::{Page, WeekPage};
-use chrono::{Date, Utc, Weekday, Datelike, Duration};
+use chrono::{Date, Utc, Weekday, Datelike};
 use failure;
 
 pub const PAGE_DIR: &str = "pages";
 
 // 日曜日と土曜日の日付を取得
-fn find_week(day: Date<Utc>) -> (Date<Utc>, Date<Utc>) {
-    let mut begin = day;
-    let mut end = day;
+fn find_week(day: &Date<Utc>) -> (Date<Utc>, Date<Utc>) {
+    let mut begin = day.clone();
+    let mut end = day.clone();
     loop {
         match begin.weekday() {
             Weekday::Sun => break,
@@ -28,7 +28,7 @@ fn find_week(day: Date<Utc>) -> (Date<Utc>, Date<Utc>) {
     (begin, end)
 }
 
-fn generate_page_filepath(directory: &Path, date: Date<Utc>) -> PathBuf {
+fn generate_page_filepath(directory: &Path, date: &Date<Utc>) -> PathBuf {
     let (week_begin, week_end) = find_week(date);
     let filename = format!("{}-{}.json", week_begin.format("%Y-%m-%d"), week_end.format("%Y-%m-%d"));
     let filepath = directory.join(PAGE_DIR).join(&filename);
@@ -36,7 +36,7 @@ fn generate_page_filepath(directory: &Path, date: Date<Utc>) -> PathBuf {
 }
 
 pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
-    let filepath = generate_page_filepath(directory, Utc::today());
+    let filepath = generate_page_filepath(directory, &Utc::today());
 
     // なぜか追記される
     // let file = OpenOptions::new()
@@ -91,4 +91,16 @@ pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>, failure::Error> {
     }
 
     Ok(pages)
+}
+
+pub fn get_week_page(directory: &Path, date: &Date<Utc>) -> Result<Option<WeekPage>, failure::Error> {
+    let filepath = generate_page_filepath(directory, date);
+    if !filepath.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(filepath)?;
+
+    let week_page: WeekPage = serde_json::from_reader(file)?;
+    Ok(Some(week_page))
 }

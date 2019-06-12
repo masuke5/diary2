@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use clap::{ArgMatches};
 use failure;
-use chrono::{Utc, Local};
+use chrono::{Utc, Local, NaiveDate, NaiveDateTime, DateTime, TimeZone};
+use colored::*;
 
 use crate::config::Config;
 use crate::storage;
 use crate::page::Page;
 
+#[allow(dead_code)]
 pub struct Context<'a> {
     directory: PathBuf,
     config_path: PathBuf,
@@ -30,6 +32,7 @@ impl<'a> Context<'a> {
 }
 
 const TEMP_FILE_TO_EDIT: &str = "new_page.md";
+const DATE_FORMATS: [&str; 4] = ["%Y/%m/%d", "%Y-%m-%d", "%m/%d", "%m-%d"];
 
 fn execute_editor(editor: &str, filepath: &Path) -> Result<bool, failure::Error> {
     let mut command = if cfg!(target_os = "windows") {
@@ -164,6 +167,52 @@ pub fn lastdt(ctx: Context) -> Result<(), failure::Error>{
     };
 
     println!("{}", last_page.created_at.to_rfc3339());
+
+    Ok(())
+}
+
+pub fn show(ctx: Context) -> Result<(), failure::Error> {
+    let date_str = ctx.subcommand_matches.value_of("date");
+    let date = match date_str {
+        Some(s) => {
+            let date = DATE_FORMATS.iter().find_map(|format| NaiveDate::parse_from_str(s, format).ok());
+            match date {
+                Some(date) => date,
+                None => {
+                    eprintln!("日付を解析できませんでした");
+                    return Ok(());
+                },
+            }
+        },
+        None => Utc::today().naive_local(),
+    };
+
+    // 指定された日付の週のページを取得
+    let week_page = storage::get_week_page(&ctx.directory, &Utc.from_local_date(&date).unwrap())?;
+    // ページが存在する時のみ出力
+    if let Some(week_page) = week_page {
+        // 指定された日付のページだけ抽出
+        let mut pages = week_page.pages.into_iter()
+            .filter(|page| !page.hidden)
+            .filter(|page| page.created_at.with_timezone(&Local).date().naive_local() == date);
+        
+        if let Some(first_page) = pages.next() {
+            fn print_page(page: &Page) {
+                let formatted = format!("{}", page.created_at.format("%Y/%m/%d %H:%M"));
+
+                println!("## {} {}", page.title, formatted.yellow());
+                println!("{}\n", page.text);
+            }
+
+            println!("# {}\n", date.format("%Y/%m/%d"));
+
+            print_page(&first_page);
+            for page in pages {
+                print_page(&page);
+            }
+        }
+
+    }
 
     Ok(())
 }
