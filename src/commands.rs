@@ -198,7 +198,7 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
         
         if let Some(first_page) = pages.next() {
             fn print_page(page: &Page) {
-                let formatted = format!("{}", page.created_at.format("%Y/%m/%d %H:%M"));
+                let formatted = format!("{}", page.created_at.with_timezone(&Local).format("%Y/%m/%d %H:%M"));
 
                 println!("## {} {}", page.title, formatted.yellow());
                 println!("{}\n", page.text);
