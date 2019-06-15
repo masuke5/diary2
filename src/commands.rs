@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use clap::{ArgMatches};
 use failure;
-use chrono::{Utc, Local, NaiveDate, NaiveDateTime, DateTime, TimeZone};
+use chrono::{Utc, Local, NaiveDate, TimeZone};
 use colored::*;
 
 use crate::config::Config;
@@ -31,7 +31,21 @@ impl<'a> Context<'a> {
     }
 }
 
+fn parse_page(text: String) -> (String, String) {
+    let mut iter = text.chars();
+
+    // 最初の行をタイトルとして取得する
+    let title: String = iter.by_ref().take_while(|&ch| ch != '\n').collect();
+    let title = title.trim();
+    // 本文
+    let text: String = iter.collect();
+    let text = text.trim();
+
+    (title.to_string(), text.to_string())
+}
+
 const TEMP_FILE_TO_EDIT: &str = "new_page.md";
+const AMEND_FILE: &str = "amend_page.md";
 const DATE_FORMATS: [&str; 4] = ["%Y/%m/%d", "%Y-%m-%d", "%m/%d", "%m-%d"];
 
 fn execute_editor(editor: &str, filepath: &Path) -> Result<bool, failure::Error> {
@@ -112,14 +126,7 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
         },
     };
 
-    let mut iter = text.chars();
-
-    // 最初の行をタイトルとして取得する
-    let title: String = iter.by_ref().take_while(|&ch| ch != '\n').collect();
-    let title = title.trim();
-    // 本文
-    let text: String = iter.collect();
-    let text = text.trim();
+    let (title, text) = parse_page(text);
 
     // 取得したタイトルが空だったらエラー
     if title.is_empty() {
@@ -128,8 +135,8 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
     }
 
     let page = Page {
-        title: title.to_string(),
-        text: text.to_string(),
+        title,
+        text,
         hidden,
         created_at,
         updated_at: vec![Utc::now()],
@@ -212,6 +219,67 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
             }
         }
 
+    }
+
+    Ok(())
+}
+
+pub fn amend(ctx: Context) -> Result<(), failure::Error> {
+    // 最新のページを取得
+    let mut last_page: Page = match storage::list(&ctx.directory, 1) {
+        Ok(pages) => match pages.into_iter().next() {
+            Some(page) => page,
+            None => {
+                eprintln!("ページがありません");
+                return Ok(());
+            },
+        },
+        Err(err) => {
+            eprintln!("ページの取得に失敗しました: {}", err);
+            return Err(From::from(err));
+        },
+    };
+
+    // 一時ファイルへ書き込み
+    let amend_file_path = ctx.directory.join(AMEND_FILE);
+    let content = format!("{}\n\n{}", last_page.title, last_page.text);
+    if let Err(err) = fs::write(&amend_file_path, &content) {
+        eprintln!("一時ファイルへの書き込みに失敗しました: {}", err);
+        return Err(From::from(err));
+    }
+
+    // エディタを開く
+    if let Err(err) = execute_editor(&ctx.config.editor, &amend_file_path) {
+        eprintln!("エディタの起動に失敗しました: {}", err);
+        return Err(err);
+    }
+
+    // エディタで編集されたファイルを読み込む
+    let text = match fs::read_to_string(&amend_file_path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("ファイルの読み込みに失敗しました: {}", err);
+            return Err(From::from(err));
+        },
+    };
+
+
+    let (title, text) = parse_page(text);
+
+    // タイトルが空だったらエラー
+    if title.is_empty() {
+        eprintln!("タイトルが空です");
+        return Ok(());
+    }
+
+    last_page.title = title;
+    last_page.text = text;
+    last_page.updated_at.push(Utc::now());
+
+    // 書き込み
+    if let Err(err) = storage::write(&ctx.directory, last_page) {
+        eprintln!("ページの書き込みに失敗しました: {}", err);
+        return Err(From::from(err));
     }
 
     Ok(())

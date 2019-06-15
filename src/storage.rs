@@ -3,6 +3,7 @@ use std::fs::{File, DirEntry};
 use std::cmp::Reverse;
 use crate::page::{Page, WeekPage};
 use chrono::{Date, Utc, Weekday, Datelike};
+use std::mem;
 use failure;
 
 pub const PAGE_DIR: &str = "pages";
@@ -55,8 +56,12 @@ pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
         WeekPage::new()
     };
 
-    // 追加して書き込む
-    week_page.pages.push(page);
+    match week_page.pages.iter().position(|old_page| page.created_at == old_page.created_at) {
+         // ページが存在したら更新 
+        Some(pos) => { mem::replace(&mut week_page.pages[pos], page); },
+        // 存在しなかったら追加する
+        None => week_page.pages.push(page),
+    };
 
     let file = File::create(&filepath)?; 
     serde_json::to_writer(file, &week_page)?;
