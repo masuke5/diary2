@@ -71,6 +71,22 @@ fn main() {
         .subcommand(SubCommand::with_name("show")
                     .arg(Arg::with_name("date")
                          .index(1)))
+        .subcommand(SubCommand::with_name("search")
+                    .arg(Arg::with_name("query")
+                         .index(1))
+                    .arg(Arg::with_name("title")
+                         .long("title")
+                         .short("t"))
+                    .arg(Arg::with_name("text")
+                         .long("text")
+                         .short("b"))
+                    .arg(Arg::with_name("show-first")
+                         .long("show-first")
+                         .short("f"))
+                    .arg(Arg::with_name("limit")
+                         .takes_value(true)
+                         .long("limit")
+                         .short("l")))
         .subcommand(SubCommand::with_name("amend"))
         .get_matches();
 
@@ -81,6 +97,7 @@ fn main() {
     commands.insert("lastdt", commands::lastdt);
     commands.insert("show", commands::show);
     commands.insert("amend", commands::amend);
+    commands.insert("search", commands::search);
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {

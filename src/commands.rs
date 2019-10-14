@@ -74,6 +74,20 @@ pub fn config(ctx: Context) -> Result<(), failure::Error> {
     Ok(())
 }
 
+pub fn print_page_headers<I: Iterator<Item = Page>>(iter: I) {
+    for page in iter.filter(|page| !page.hidden) {
+        let local = page.created_at.with_timezone(&Local);
+        println!("{} ({})", page.title, local.format("%Y/%m/%d %H:%M"));
+    }
+}
+
+fn print_page(page: &Page) {
+    let formatted = format!("{}", page.created_at.with_timezone(&Local).format("%Y/%m/%d %H:%M"));
+
+    println!("## {} {}", page.title, formatted.yellow());
+    println!("{}\n", page.text);
+}
+
 pub fn list(ctx: Context) -> Result<(), failure::Error> {
     let limit = match ctx.subcommand_matches.value_of("limit") {
         Some(limit) => match limit.parse::<u32>() {
@@ -94,10 +108,7 @@ pub fn list(ctx: Context) -> Result<(), failure::Error> {
         },
     };
 
-    for page in pages.into_iter().filter(|page| !page.hidden) {
-        let local = page.created_at.with_timezone(&Local);
-        println!("{} ({})", page.title, local.format("%Y/%m/%d %H:%M"));
-    }
+    print_page_headers(pages.into_iter());
 
     Ok(())
 }
@@ -231,13 +242,6 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
             .filter(|page| page.created_at.with_timezone(&Local).date().naive_local() == date);
         
         if let Some(first_page) = pages.next() {
-            fn print_page(page: &Page) {
-                let formatted = format!("{}", page.created_at.with_timezone(&Local).format("%Y/%m/%d %H:%M"));
-
-                println!("## {} {}", page.title, formatted.yellow());
-                println!("{}\n", page.text);
-            }
-
             println!("# {}\n", date.format("%Y/%m/%d"));
 
             print_page(&first_page);
@@ -307,6 +311,57 @@ pub fn amend(ctx: Context) -> Result<(), failure::Error> {
     if let Err(err) = storage::write(&ctx.directory, last_page) {
         eprintln!("ページの書き込みに失敗しました: {}", err);
         return Err(From::from(err));
+    }
+
+    Ok(())
+}
+
+pub fn search(ctx: Context) -> Result<(), failure::Error> {
+    let query = ctx.subcommand_matches.value_of("query").unwrap();   
+    let should_search_by_title_only = ctx.subcommand_matches.is_present("title");
+    let should_search_by_text_only = ctx.subcommand_matches.is_present("text");
+    let should_show_first_page = ctx.subcommand_matches.is_present("show-first");
+    let limit = if should_show_first_page {
+        1
+    } else {
+        match ctx.subcommand_matches.value_of("limit") {
+            Some(limit) => match limit.parse::<u32>() {
+                Ok(limit) => limit,
+                Err(err) => {
+                    eprintln!("--limitの値が数値ではありません");
+                    return Err(From::from(err));
+                },
+            },
+            None => ctx.config.default_list_limit,
+        }
+    };
+
+    let filter = |page: &Page| -> bool {
+        if should_search_by_title_only {
+            page.title.contains(query)
+        } else if should_search_by_text_only {
+            page.text.contains(query)
+        } else {
+            page.title.contains(query) || page.text.contains(query)
+        }
+    };
+
+    let pages = match storage::list_with_filter(&ctx.directory, limit, filter) {
+        Ok(pages) => pages,
+        Err(err) => {
+            eprintln!("ページの取得に失敗しました: {}", err);
+            return Err(From::from(err));
+        },
+    };
+
+    if should_show_first_page {
+        if pages.len() > 0 {
+            print_page(&pages[0]);
+        } else {
+            eprintln!("ページが見つかりませんでした");
+        }
+    } else {
+        print_page_headers(pages.into_iter());
     }
 
     Ok(())

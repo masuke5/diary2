@@ -70,6 +70,11 @@ pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
 }
 
 pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>, failure::Error> {
+    list_with_filter(directory, limit, |_| true)
+}
+
+pub fn list_with_filter<F>(directory: &Path, limit: u32, filter: F) -> Result<Vec<Page>, failure::Error>
+    where F: Fn(&Page) -> bool {
     // ページが格納されているディレクトリのファイルをすべて取得する
     let mut entries: Vec<DirEntry> = directory.join(PAGE_DIR)
         .read_dir()?
@@ -90,8 +95,11 @@ pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>, failure::Error> {
             if count >= limit {
                 break 'a;
             }
-            pages.push(page);
-            count += 1;
+
+            if filter(&page) {
+                pages.push(page);
+                count += 1;
+            }
         }
     }
 
