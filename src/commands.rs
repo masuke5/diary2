@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use clap::{ArgMatches};
 use failure;
-use chrono::{Utc, Local, NaiveDate, TimeZone};
+use chrono::{Utc, Local, NaiveDate, TimeZone, Datelike};
 use colored::*;
 
 use crate::config::Config;
@@ -46,7 +46,6 @@ fn parse_page(text: String) -> (String, String) {
 
 const TEMP_FILE_TO_EDIT: &str = "new_page.md";
 const AMEND_FILE: &str = "amend_page.md";
-const DATE_FORMATS: [&str; 4] = ["%Y/%m/%d", "%Y-%m-%d", "%m/%d", "%m-%d"];
 
 fn execute_editor(editor: &str, filepath: &Path) -> Result<bool, failure::Error> {
     let mut command = if cfg!(target_os = "windows") {
@@ -178,12 +177,40 @@ pub fn lastdt(ctx: Context) -> Result<(), failure::Error>{
     Ok(())
 }
 
+pub fn parse_date_str(s: &str) -> Option<NaiveDate> {
+    let s = s.trim();
+    if s == "" {
+        return None;
+    }
+
+    let now = Local::now();
+    let default_year = now.year();
+    let default_month = now.month();
+
+    let value_strs: Vec<&str> = s.split(|c| c == '/' || c == '-').collect();
+    let mut values = Vec::<u32>::new();
+    for value_str in value_strs {
+        match value_str.parse() {
+            Ok(n) => values.push(n),
+            Err(_) => return None,
+        };
+    }
+
+    let date = match values.len() {
+        1 => NaiveDate::from_ymd(default_year, default_month, values[0]),
+        2 => NaiveDate::from_ymd(default_year, values[0], values[1]),
+        3 => NaiveDate::from_ymd(values[0] as i32, values[1], values[2]),
+        _ => return None,
+    };
+    
+    Some(date)
+}
+
 pub fn show(ctx: Context) -> Result<(), failure::Error> {
     let date_str = ctx.subcommand_matches.value_of("date");
     let date = match date_str {
         Some(s) => {
-            let date = DATE_FORMATS.iter().find_map(|format| NaiveDate::parse_from_str(s, format).ok());
-            match date {
+            match parse_date_str(s) {
                 Some(date) => date,
                 None => {
                     eprintln!("日付を解析できませんでした");
