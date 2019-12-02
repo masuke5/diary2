@@ -7,7 +7,7 @@ mod config;
 mod commands;
 
 use std::env;
-use std::path::{Path};
+use std::path::{Path, PathBuf};
 use std::io::Read;
 use std::fs::File;
 use std::fs;
@@ -32,8 +32,19 @@ fn load_config(config_file_path: &Path) -> Result<Config, String> {
     Ok(config)
 }
 
+fn get_directory() -> PathBuf {
+    if cfg!(windows) {
+        Path::new(&env::var("APPDATA").expect("APPDATAが設定されていません")).join("diary2")
+    } else {
+        let config_dir = env::var("XDG_CONFIG_HOME")
+            .map(|dir| Path::new(&dir).to_path_buf())
+            .unwrap_or(Path::new(&env::var("HOME").expect("HOMEが設定されていません")).join(".config"));
+        config_dir.join("diary2")
+    }
+}
+
 fn main() {
-    let directory = Path::new(&env::var("APPDATA").expect("APPDATAが設定されていません")).join("diary2");
+    let directory = get_directory();
     if !directory.exists() {
         fs::create_dir_all(&directory.join(storage::PAGE_DIR))
             .expect(&format!("\"{}\" の作成に失敗しました", directory.join(storage::PAGE_DIR).to_string_lossy()));
