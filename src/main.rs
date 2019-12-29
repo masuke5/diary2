@@ -5,6 +5,8 @@ mod page;
 mod storage;
 mod config;
 mod commands;
+mod dropbox;
+mod secret;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -99,6 +101,7 @@ fn main() {
                          .long("limit")
                          .short("l")))
         .subcommand(SubCommand::with_name("amend"))
+        .subcommand(SubCommand::with_name("auth"))
         .get_matches();
 
     let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> = HashMap::new();
@@ -109,6 +112,7 @@ fn main() {
     commands.insert("show", commands::show);
     commands.insert("amend", commands::amend);
     commands.insert("search", commands::search);
+    commands.insert("auth", commands::auth);
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {

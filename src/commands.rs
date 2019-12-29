@@ -9,6 +9,7 @@ use colored::*;
 use crate::config::Config;
 use crate::storage;
 use crate::page::Page;
+use crate::{dropbox, dropbox::AccessToken};
 
 #[allow(dead_code)]
 pub struct Context<'a> {
@@ -46,6 +47,7 @@ fn parse_page(text: String) -> (String, String) {
 
 const TEMP_FILE_TO_EDIT: &str = "new_page.md";
 const AMEND_FILE: &str = "amend_page.md";
+const ACCESS_TOKEN_FILE: &str = "access_token";
 
 fn execute_editor(editor: &str, filepath: &Path) -> Result<bool, failure::Error> {
     let mut command = if cfg!(target_os = "windows") {
@@ -363,6 +365,17 @@ pub fn search(ctx: Context) -> Result<(), failure::Error> {
     } else {
         print_page_headers(pages.into_iter());
     }
+
+    Ok(())
+}
+
+pub fn auth(ctx: Context) -> Result<(), failure::Error> {
+    let access_token = dropbox::get_access_token()?;
+    
+    let path = ctx.directory.join(ACCESS_TOKEN_FILE);
+    fs::write(path, &access_token.value)?;
+
+    println!("認証に成功しました");
 
     Ok(())
 }
