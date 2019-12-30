@@ -7,7 +7,7 @@ use oauth2::{AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, Redi
 use url::Url;
 use chrono::{Utc, DateTime};
 use failure;
-use reqwest::Client;
+use reqwest::{header, Client};
 
 use crate::secret;
 
@@ -92,17 +92,18 @@ pub fn get_access_token() -> Result<AccessToken, failure::Error> {
 
 #[derive(Debug, Deserialize)]
 pub struct FileInfo {
-    id: String,
-    client_modified: DateTime<Utc>,
+    pub name: String,
+    pub client_modified: DateTime<Utc>,
 }
 
 pub fn download_file(client: &Client, access_token: &AccessToken, path: &str) -> Result<(FileInfo, String), failure::Error> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
+    let json = serde_json::to_string(&parameters)?;
 
-    let mut res = client.post("https://content.dropbox.api.com/2/files/download")
-        .header("Authorization", &format!("Bearer {}", &access_token.value))
-        .json(&parameters)
+    let mut res = client.post("https://content.dropboxapi.com/2/files/download")
+        .header(header::AUTHORIZATION, &format!("Bearer {}", &access_token.value))
+        .header("Dropbox-API-Arg", &json)
         .send()?;
 
     let info: FileInfo = serde_json::from_str(res.headers().get("Dropbox-API-Result").unwrap().to_str()?)?;
@@ -118,10 +119,46 @@ pub fn upload_file(client: &Client, access_token: &AccessToken, path: &str, cont
     let json = serde_json::to_string(&parameters)?;
 
     client.post("https://content.dropboxapi.com/2/files/upload")
-        .header("Authorization", &format!("Bearer {}", &access_token.value))
+        .header(header::AUTHORIZATION, &format!("Bearer {}", &access_token.value))
+        .header(header::CONTENT_TYPE, "application/octet-stream")
         .header("Dropbox-API-Arg", &json)
         .body(contents)
         .send()?;
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileList {
+    entries: Vec<FileInfo>,
+}
+
+pub fn list_files(client: &Client, access_token: &AccessToken, path: &str) -> Result<Vec<FileInfo>, failure::Error> {
+    let mut parameters = HashMap::new();
+    parameters.insert("path", path);
+
+    let list: FileList = client.post("https://api.dropboxapi.com/2/files/list_folder")
+        .header(header::AUTHORIZATION, &format!("Bearer {}", &access_token.value))
+        .json(&parameters)
+        .send()?
+        .json()?;
+
+    Ok(list.entries)
+}
+
+pub fn create_folder(client: &Client, access_token: &AccessToken, path: &str) -> Result<(), failure::Error> {
+    let mut parameters = HashMap::new();
+    parameters.insert("path", path);
+
+    let mut res = client.post("https://api.dropboxapi.com/2/files/create_folder_v2")
+        .header(header::AUTHORIZATION, &format!("Bearer {}", &access_token.value))
+        .json(&parameters)
+        .send()?;
+
+    let j: reqwest::Result<serde_json::Value> = res.json();
+    if let Err(_) = j {
+        eprintln!("フォルダの作成に失敗しました: {}", res.text()?);
+    }
 
     Ok(())
 }

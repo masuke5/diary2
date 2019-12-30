@@ -1,10 +1,12 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use clap::{ArgMatches};
 use failure;
 use chrono::{Utc, Local, NaiveDate, TimeZone, Datelike};
 use colored::*;
+use reqwest::Client;
 
 use crate::config::Config;
 use crate::storage;
@@ -370,12 +372,49 @@ pub fn search(ctx: Context) -> Result<(), failure::Error> {
 }
 
 pub fn auth(ctx: Context) -> Result<(), failure::Error> {
-    let access_token = dropbox::get_access_token()?;
+    let access_token = match dropbox::get_access_token() {
+        Ok(access_token) => access_token,
+        Err(err) => {
+            eprintln!("アクセストークンの取得に失敗しました: {}", err);
+            return Err(err.into());
+        },
+    };
     
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
-    fs::write(path, &access_token.value)?;
+    if let Err(err) = fs::write(path, &access_token.value) {
+        eprintln!("アクセストークンの保存に失敗しました: {}", err);
+        return Err(err.into());
+    }
 
     println!("認証に成功しました");
 
+    Ok(())
+}
+
+pub fn sync(ctx: Context) -> Result<(), failure::Error> {
+    // アクセストークンを取得
+    let path = ctx.directory.join(ACCESS_TOKEN_FILE);
+    let access_token = match fs::read_to_string(path) {
+        Ok(access_token) => access_token,
+        Err(err) => {
+            if err.kind() == io::ErrorKind::NotFound {
+                eprintln!("認証していません");
+            } else {
+                eprintln!("アクセストークンの取得に失敗しました: {}", err);
+            }
+
+            return Err(err.into());
+        },
+    };
+    let access_token = AccessToken {
+        value: access_token,
+    };
+
+    let client = Client::new();
+    if let Err(err) = storage::sync(&ctx.directory, &client, &access_token) {
+        eprintln!("同期に失敗しました: {}", err);
+        return Err(err.into());
+    }
+    
     Ok(())
 }

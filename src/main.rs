@@ -102,6 +102,7 @@ fn main() {
                          .short("l")))
         .subcommand(SubCommand::with_name("amend"))
         .subcommand(SubCommand::with_name("auth"))
+        .subcommand(SubCommand::with_name("sync"))
         .get_matches();
 
     let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> = HashMap::new();
@@ -113,6 +114,7 @@ fn main() {
     commands.insert("amend", commands::amend);
     commands.insert("search", commands::search);
     commands.insert("auth", commands::auth);
+    commands.insert("sync", commands::sync);
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {

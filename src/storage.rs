@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::fs;
 use std::fs::{File, DirEntry};
 use std::cmp::Reverse;
 use crate::page::{Page, WeekPage};
@@ -6,7 +7,10 @@ use chrono::{Date, Utc, Weekday, Datelike};
 use std::mem;
 use failure;
 
+use crate::{dropbox, dropbox::{AccessToken, FileInfo}};
+
 pub const PAGE_DIR: &str = "pages";
+pub const PAGES_DIR_ON_DROPBOX: &str = "/pages";
 
 // 日曜日と土曜日の日付を取得
 fn find_week(day: &Date<Utc>) -> (Date<Utc>, Date<Utc>) {
@@ -116,4 +120,75 @@ pub fn get_week_page(directory: &Path, date: &Date<Utc>) -> Result<Option<WeekPa
 
     let week_page: WeekPage = serde_json::from_reader(file)?;
     Ok(Some(week_page))
+}
+
+pub fn integrate(wpage1: WeekPage, wpage2: WeekPage) -> WeekPage {
+    let mut new_wpage = wpage2.clone();
+
+    for page in wpage1.pages {
+        let page2 = wpage2.pages.iter().find(|page2| page.title == page2.title);
+        if page2.is_none() {
+            // 同じタイトルのページが存在しない場合は追加する
+            // TODO: IDにする
+            new_wpage.pages.push(page);
+        }
+    }
+
+    new_wpage
+}
+
+pub fn sync(directory: &Path, client: &reqwest::Client, access_token: &AccessToken) -> Result<(), failure::Error> {
+    dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX)?;
+
+    let files_on_dropbox = dropbox::list_files(client, access_token, PAGES_DIR_ON_DROPBOX)?;
+    let files_on_local: Vec<FileInfo> = fs::read_dir(directory.join(PAGE_DIR))?
+        .map(|entry| FileInfo {
+            name: entry.as_ref().unwrap().path().as_path().file_name().unwrap().to_string_lossy().to_string(),
+            client_modified: entry.unwrap().metadata().unwrap().modified().unwrap().into(), // UTC
+        })
+        .collect();
+
+    let pages_dir = directory.join(PAGE_DIR);
+    let gen_path = |name: &str| {
+        (pages_dir.join(name), String::from(PAGES_DIR_ON_DROPBOX) + "/" + name)
+    };
+
+    for file_on_dropbox in &files_on_dropbox {
+        let (local_path, dropbox_path) = gen_path(&file_on_dropbox.name);
+        let file_on_local = files_on_local.iter().find(|file| file_on_dropbox.name == file.name);
+
+        if let Some(_) = file_on_local {
+            // Dropbox上にもローカルにもファイルが存在して、タイムスタンプが異なっている場合は統合する
+            let (_, page_on_dropbox) = dropbox::download_file(client, access_token, &dropbox_path)?;
+            let wpage_on_dropbox: WeekPage = serde_json::from_str(&page_on_dropbox)?;
+            let wpage_on_local = serde_json::from_reader(File::open(&local_path)?)?;
+
+            let wpage = integrate(wpage_on_dropbox, wpage_on_local);
+            let json = serde_json::to_string(&wpage)?;
+
+            // 双方のファイルを更新する
+            println!("{}を更新しています...", file_on_dropbox.name);
+            fs::write(&local_path, &json)?;
+            dropbox::upload_file(client, access_token, &dropbox_path, json)?;
+        } else {
+            // Dropbox上に存在するファイルがローカルに存在しない場合はダウンロードする
+            println!("{}をダウンロードしています...", file_on_dropbox.name);
+            let (_, contents) = dropbox::download_file(client, access_token, &dropbox_path)?;
+            fs::write(local_path, &contents)?;
+        }
+    }
+
+    for file_on_local in &files_on_local {
+        let (local_path, dropbox_path) = gen_path(&file_on_local.name);
+        let file_on_dropbox = files_on_dropbox.iter().find(|file| file_on_local.name == file.name);
+
+        // ローカルに存在するファイルがDropbox上に存在しない場合はアップロードする
+        if file_on_dropbox.is_none() {
+            println!("{}をアップロードしています...", file_on_local.name);
+            let json = fs::read_to_string(local_path)?;
+            dropbox::upload_file(client, access_token, &dropbox_path, json)?;
+        }
+    }
+
+    Ok(())
 }
