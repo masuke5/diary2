@@ -392,6 +392,15 @@ pub fn auth(ctx: Context) -> Result<(), failure::Error> {
 }
 
 pub fn sync(ctx: Context) -> Result<(), failure::Error> {
+    // バックアップを取っておく
+    let backup_id = match storage::create_pages_backup(&ctx.directory) {
+        Ok(backup_id) => backup_id,
+        Err(err) => {
+            eprintln!("バックアップの作成に失敗しました: {}", err);
+            return Err(err.into());
+        },
+    };
+
     // アクセストークンを取得
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
     let access_token = match fs::read_to_string(path) {
@@ -411,10 +420,26 @@ pub fn sync(ctx: Context) -> Result<(), failure::Error> {
     };
 
     let client = Client::new();
-    if let Err(err) = storage::sync(&ctx.directory, &client, &access_token) {
-        eprintln!("同期に失敗しました: {}", err);
-        return Err(err.into());
-    }
+    match storage::sync(&ctx.directory, &client, &access_token) {
+        Ok(_) => {
+            // バックアップを削除
+            if let Err(err) = storage::remove_pages_backup(&ctx.directory, backup_id) {
+                eprintln!("バックアップの削除に失敗しました: {}", err);
+                return Err(err.into());
+            }
+        },
+        Err(err) => {
+            eprintln!("同期に失敗しました: {}", err);
+
+            // バックアップを復元する
+            if let Err(err) = storage::rollback(&ctx.directory, backup_id) {
+                eprintln!("バックアップの復元に失敗しました: {}", err);
+                return Err(err.into());
+            }
+
+            return Err(err.into());
+        }
+    };
     
     Ok(())
 }

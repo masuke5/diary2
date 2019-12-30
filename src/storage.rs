@@ -11,6 +11,7 @@ use crate::{dropbox, dropbox::{AccessToken, FileInfo}};
 
 pub const PAGE_DIR: &str = "pages";
 pub const PAGES_DIR_ON_DROPBOX: &str = "/pages";
+pub const BACKUP_DIR_PREFIX: &str = "backup";
 
 // 日曜日と土曜日の日付を取得
 fn find_week(day: &Date<Utc>) -> (Date<Utc>, Date<Utc>) {
@@ -206,6 +207,71 @@ pub fn sync(directory: &Path, client: &reqwest::Client, access_token: &AccessTok
             serde_json::to_writer(File::create(&local_path)?, &wpage)?;
         }
     }
+
+    Ok(())
+}
+
+fn generate_backup_dir_path(base: &Path, prefix: &str, id: u32) -> PathBuf {
+    base.join(&format!("{}_{}", prefix, id))
+}
+
+fn generate_backup_dir_path_not_exists(base: &Path, prefix: &str) -> (PathBuf, u32) {
+    let mut id = 1;
+    loop {
+        let path = generate_backup_dir_path(base, prefix, id);
+        if !path.exists() {
+            return (path, id);
+        }
+
+        id += 1;
+    }
+}
+
+pub fn create_pages_backup(directory: &Path) -> Result<u32, failure::Error> {
+    let page_dir = directory.join(PAGE_DIR);
+    let (backup_dir, id) = generate_backup_dir_path_not_exists(directory, BACKUP_DIR_PREFIX);
+
+    // PAGE_DIR内のすべてのファイルをコピーする
+    fs::create_dir(&backup_dir)?;
+    for entry in fs::read_dir(&page_dir)? {
+        let entry = entry?;
+        if let Ok(ft) = entry.file_type() {
+            if ft.is_file() {
+                let to = backup_dir.join(entry.path().as_path().file_name().unwrap());
+                fs::copy(entry.path(), &to)?;
+            }
+        }
+    }
+
+    Ok(id)
+}
+
+pub fn rollback(directory: &Path, id: u32) -> Result<(), failure::Error> {
+    let page_dir = directory.join(PAGE_DIR);
+    let backup_dir = generate_backup_dir_path(directory, BACKUP_DIR_PREFIX, id);
+
+    fs::remove_dir_all(&page_dir)?;
+    fs::create_dir(&page_dir)?;
+
+    // backup_dir内のすべてのファイルをコピーする
+    for entry in fs::read_dir(&backup_dir)? {
+        let entry = entry?;
+        if let Ok(ft) = entry.file_type() {
+            if ft.is_file() {
+                let to = page_dir.join(entry.path().as_path().file_name().unwrap());
+                fs::copy(entry.path(), &to)?;
+            }
+        }
+    }
+
+    remove_pages_backup(directory, id)?;
+
+    Ok(())
+}
+
+pub fn remove_pages_backup(directory: &Path, id: u32) -> Result<(), failure::Error> {
+    let backup_dir = generate_backup_dir_path(directory, BACKUP_DIR_PREFIX, id);
+    fs::remove_dir_all(backup_dir)?;
 
     Ok(())
 }
