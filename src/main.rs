@@ -20,6 +20,7 @@ use toml;
 use config::Config;
 
 const CONFIG_FILE: &str = "config.toml";
+const PAGE_VERSION_FILE: &str = "page_version";
 
 fn load_config(config_file_path: &Path) -> Result<Config, String> {
     if !config_file_path.exists() {
@@ -45,12 +46,26 @@ fn get_directory() -> PathBuf {
     }
 }
 
+fn get_page_version(base: &Path) -> u32 {
+    let file_path = base.join(PAGE_VERSION_FILE);
+
+    if file_path.exists() {
+        let version = fs::read_to_string(file_path).expect("バージョンの読み込みに失敗しました");
+        version.parse().expect("バージョンが数字ではありません")
+    } else {
+        fs::write(file_path, &format!("{}", page::CURRENT_PAGE_VERSION)).expect("バージョンの書き込みに失敗しました");
+        page::CURRENT_PAGE_VERSION
+    }
+}
+
 fn main() {
     let directory = get_directory();
     if !directory.exists() {
         fs::create_dir_all(&directory.join(storage::PAGE_DIR))
             .expect(&format!("\"{}\" の作成に失敗しました", directory.join(storage::PAGE_DIR).to_string_lossy()));
     }
+
+    let page_version = get_page_version(&directory);
 
     // 設定ファイルを読み込む
     let config_file_path = directory.join(CONFIG_FILE);
@@ -103,6 +118,7 @@ fn main() {
         .subcommand(SubCommand::with_name("amend"))
         .subcommand(SubCommand::with_name("auth"))
         .subcommand(SubCommand::with_name("sync"))
+        .subcommand(SubCommand::with_name("fixpage"))
         .get_matches();
 
     let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> = HashMap::new();
@@ -115,10 +131,19 @@ fn main() {
     commands.insert("search", commands::search);
     commands.insert("auth", commands::auth);
     commands.insert("sync", commands::sync);
+    commands.insert("fixpage", commands::fixpage);
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {
-            if let Err(_) = func(commands::Context::new(&directory, &config_file_path, config, &matches, sub_matches)) {
+            if name != "fixpage" {
+                if page_version != page::CURRENT_PAGE_VERSION {
+                    eprintln!("ページの保存形式が違います。");
+                    eprintln!("`diary2 fixpage` を実行してください。");
+                    process::exit(2);
+                }
+            }
+
+            if let Err(_) = func(commands::Context::new(&directory, &config_file_path, config, &matches, sub_matches, page_version)) {
                 std::process::exit(1);
             }
             break;

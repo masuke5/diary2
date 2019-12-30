@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 
+pub const CURRENT_PAGE_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
     pub title: String,

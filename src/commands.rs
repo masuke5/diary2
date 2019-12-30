@@ -10,7 +10,7 @@ use reqwest::Client;
 
 use crate::config::Config;
 use crate::storage;
-use crate::page::Page;
+use crate::page::{Page, CURRENT_PAGE_VERSION};
 use crate::{dropbox, dropbox::AccessToken};
 
 #[allow(dead_code)]
@@ -20,16 +20,25 @@ pub struct Context<'a> {
     config: Config,
     matches: &'a ArgMatches<'a>,
     subcommand_matches: &'a ArgMatches<'a>,
+    page_version: u32,
 }
 
 impl<'a> Context<'a> {
-    pub fn new(directory: &Path, config_path: &Path, config: Config, matches: &'a ArgMatches<'a>, subcommand_matches: &'a ArgMatches<'a>) -> Self {
+    pub fn new(
+        directory: &Path,
+        config_path: &Path,
+        config: Config,
+        matches: &'a ArgMatches<'a>,
+        subcommand_matches: &'a ArgMatches<'a>,
+        page_version: u32,
+    ) -> Self {
         Self {
             directory: directory.to_path_buf(),
             config_path: config_path.to_path_buf(),
             config,
             matches,
             subcommand_matches,
+            page_version,
         }
     }
 }
@@ -441,5 +450,16 @@ pub fn sync(ctx: Context) -> Result<(), failure::Error> {
         }
     };
     
+    Ok(())
+}
+
+pub fn fixpage(ctx: Context) -> Result<(), failure::Error> {
+    match (ctx.page_version, CURRENT_PAGE_VERSION) {
+        (a, b) if a == b => {
+            println!("変換は必要ありません");
+        },
+        _ => unreachable!(),
+    };
+
     Ok(())
 }
