@@ -81,7 +81,7 @@ pub fn config(ctx: Context) -> Result<(), failure::Error> {
 pub fn print_page_headers<I: Iterator<Item = Page>>(iter: I) {
     for page in iter.filter(|page| !page.hidden) {
         let local = page.created_at.with_timezone(&Local);
-        println!("{} ({})", page.title, local.format("%Y/%m/%d %H:%M"));
+        println!("{} {}", page.title, format!("{}", local.format("%Y/%m/%d %H:%M")).yellow());
     }
 }
 
