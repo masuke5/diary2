@@ -112,20 +112,21 @@ pub fn download_file(client: &Client, access_token: &AccessToken, path: &str) ->
     Ok((info, contents))
 }
 
-pub fn upload_file(client: &Client, access_token: &AccessToken, path: &str, contents: String) -> Result<(), failure::Error> {
+pub fn upload_file(client: &Client, access_token: &AccessToken, path: &str, contents: String) -> Result<FileInfo, failure::Error> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
     parameters.insert("mode", "overwrite");
     let json = serde_json::to_string(&parameters)?;
 
-    client.post("https://content.dropboxapi.com/2/files/upload")
+    let info: FileInfo = client.post("https://content.dropboxapi.com/2/files/upload")
         .header(header::AUTHORIZATION, &format!("Bearer {}", &access_token.value))
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header("Dropbox-API-Arg", &json)
         .body(contents)
-        .send()?;
+        .send()?
+        .json()?;
 
-    Ok(())
+    Ok(info)
 }
 
 #[derive(Debug, Deserialize)]
