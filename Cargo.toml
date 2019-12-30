@@ -16,3 +16,4 @@ toml = "0.5"
 oauth2 = "3.0.0-alpha.7"
 url = "1.0"
 reqwest = "0.9"
+uuid = { version = "0.8", features = ["serde", "v4"] }

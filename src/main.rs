@@ -145,6 +145,11 @@ fn main() {
 
             if let Err(_) = func(commands::Context::new(&directory, &config_file_path, config, &matches, sub_matches, page_version)) {
                 std::process::exit(1);
+            } else {
+                if name == "fixpage" {
+                    let file_path = directory.join(PAGE_VERSION_FILE);
+                    fs::write(&file_path, &format!("{}", page::CURRENT_PAGE_VERSION)).unwrap();
+                }
             }
             break;
         }

@@ -7,6 +7,7 @@ use failure;
 use chrono::{Utc, Local, NaiveDate, TimeZone, Datelike};
 use colored::*;
 use reqwest::Client;
+use uuid::Uuid;
 
 use crate::config::Config;
 use crate::storage;
@@ -158,6 +159,7 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
     }
 
     let page = Page {
+        id: Uuid::new_v4().to_string(),
         title,
         text,
         hidden,
@@ -457,6 +459,12 @@ pub fn fixpage(ctx: Context) -> Result<(), failure::Error> {
     match (ctx.page_version, CURRENT_PAGE_VERSION) {
         (a, b) if a == b => {
             println!("変換は必要ありません");
+        },
+        (1, 2) => {
+            if let Err(err) = storage::fix_1_to_2(&ctx.directory) {
+                eprintln!("修正に失敗しました: {}", err);
+                return Err(err.into());
+            }
         },
         _ => unreachable!(),
     };

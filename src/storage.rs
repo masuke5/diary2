@@ -2,10 +2,11 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use std::fs::{File, DirEntry};
 use std::cmp::Reverse;
-use crate::page::{Page, WeekPage};
+use crate::page::{Page, WeekPage, WeekPageV1};
 use chrono::{Date, Utc, Weekday, Datelike, TimeZone};
 use std::mem;
 use failure;
+use uuid::Uuid;
 
 use crate::{dropbox, dropbox::{AccessToken, FileInfo}};
 
@@ -127,10 +128,9 @@ pub fn integrate(wpage1: WeekPage, wpage2: WeekPage) -> WeekPage {
     let mut new_wpage = wpage2.clone();
 
     for page in wpage1.pages {
-        let page2 = wpage2.pages.iter().find(|page2| page.title == page2.title);
+        let page2 = wpage2.pages.iter().find(|page2| page.id == page2.id);
         if page2.is_none() {
-            // 同じタイトルのページが存在しない場合は追加する
-            // TODO: IDにする
+            // 同じIDのページが存在しない場合は追加する
             new_wpage.pages.push(page);
         }
     }
@@ -211,6 +211,10 @@ pub fn sync(directory: &Path, client: &reqwest::Client, access_token: &AccessTok
     Ok(())
 }
 
+// ==============================
+// バックアップ
+// ==============================
+
 fn generate_backup_dir_path(base: &Path, prefix: &str, id: u32) -> PathBuf {
     base.join(&format!("{}_{}", prefix, id))
 }
@@ -272,6 +276,44 @@ pub fn rollback(directory: &Path, id: u32) -> Result<(), failure::Error> {
 pub fn remove_pages_backup(directory: &Path, id: u32) -> Result<(), failure::Error> {
     let backup_dir = generate_backup_dir_path(directory, BACKUP_DIR_PREFIX, id);
     fs::remove_dir_all(backup_dir)?;
+
+    Ok(())
+}
+
+// ==============================
+// 修正
+// ==============================
+
+fn convert_week_page_v1_to_v2(wpage: WeekPageV1) -> WeekPage {
+    WeekPage {
+        pages: wpage.pages.into_iter().map(|v1| Page {
+            id: Uuid::new_v4().to_string(),
+            title: v1.title,
+            text: v1.text,
+            hidden: v1.hidden,
+            created_at: v1.created_at,
+            updated_at: v1.updated_at,
+        }).collect(),
+        uploaded_at: wpage.uploaded_at,
+    }
+}
+
+pub fn fix_1_to_2(directory: &Path) -> Result<(), failure::Error> {
+    // ページが格納されているディレクトリのファイルをすべて取得する
+    let entries = directory.join(PAGE_DIR)
+        .read_dir()?
+        .filter(|entry| entry.is_ok())
+        .map(|entry| entry.unwrap());
+
+    for entry in entries {
+        let file = File::open(entry.path())?;
+        let wpage: WeekPageV1 = serde_json::from_reader(&file)?;
+        drop(file);
+
+        let wpage = convert_week_page_v1_to_v2(wpage);
+        let file = File::create(entry.path())?;
+        serde_json::to_writer(&file, &wpage)?;
+    }
 
     Ok(())
 }
