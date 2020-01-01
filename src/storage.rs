@@ -62,6 +62,9 @@ pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
         WeekPage::new()
     };
 
+    // syncコマンドでアップロードされるようにuploaded_atを消す
+    week_page.uploaded_at = None;
+
     match week_page.pages.iter().position(|old_page| page.created_at == old_page.created_at) {
          // ページが存在したら更新 
         Some(pos) => { mem::replace(&mut week_page.pages[pos], page); },
