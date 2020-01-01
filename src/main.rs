@@ -78,7 +78,7 @@ fn main() {
     };
 
     let matches = App::new("diary2")
-        .version("1.0")
+        .version("1.1.1")
         .subcommand(SubCommand::with_name("config")
                     .about("edit config")
                     .arg(Arg::with_name("editor")
