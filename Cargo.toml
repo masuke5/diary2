@@ -1,6 +1,6 @@
 [package]
 name = "diary2"
-version = "1.1.1"
+version = "1.1.2"
 authors = ["masuke5 <s.zerogoichi@gmail.com>"]
 edition = "2018"
 
