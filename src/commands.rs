@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use clap::{ArgMatches};
+use clap::ArgMatches;
 use failure;
 use chrono::{Utc, Local, NaiveDate, TimeZone, Datelike};
 use colored::*;
@@ -89,7 +89,7 @@ pub fn config(ctx: Context) -> Result<(), failure::Error> {
 }
 
 pub fn print_page_headers<I: Iterator<Item = Page>>(iter: I) {
-    for page in iter.filter(|page| !page.hidden) {
+    for page in iter {
         let local = page.created_at.with_timezone(&Local);
         println!("{} {}", page.title, format!("{}", local.format("%Y/%m/%d %H:%M")).yellow());
     }
@@ -114,7 +114,7 @@ pub fn list(ctx: Context) -> Result<(), failure::Error> {
         None => ctx.config.default_list_limit,
     };
 
-    let pages = match storage::list(&ctx.directory, limit) {
+    let pages = match storage::list_with_filter(&ctx.directory, limit, |page| !page.hidden) {
         Ok(pages) => pages,
         Err(err) => {
             eprintln!("ページの取得に失敗しました: {}", err);
@@ -352,6 +352,10 @@ pub fn search(ctx: Context) -> Result<(), failure::Error> {
     };
 
     let filter = |page: &Page| -> bool {
+        if page.hidden {
+            return false;
+        }
+
         if should_search_by_title_only {
             page.title.contains(query)
         } else if should_search_by_text_only {
