@@ -65,12 +65,16 @@ fn get_page_version(base: &Path) -> u32 {
 
 fn main() {
     let directory = get_directory();
-    if !directory.exists() {
-        fs::create_dir_all(&directory.join(storage::PAGE_DIR)).expect(&format!(
-            "\"{}\" の作成に失敗しました",
-            directory.join(storage::PAGE_DIR).to_string_lossy()
-        ));
-    }
+
+    fs::create_dir_all(&directory.join(storage::PAGE_DIR)).expect(&format!(
+        "\"{}\" の作成に失敗しました",
+        directory.join(storage::PAGE_DIR).to_string_lossy()
+    ));
+
+    fs::create_dir_all(&directory.join(storage::IMAGE_DIR)).expect(&format!(
+        "\"{}\" の作成に失敗しました",
+        directory.join(storage::PAGE_DIR).to_string_lossy()
+    ));
 
     let page_version = get_page_version(&directory);
 

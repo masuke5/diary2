@@ -1,4 +1,4 @@
-use chrono::{Datelike, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
 use clap::ArgMatches;
 use colored::*;
 use failure;
@@ -10,7 +10,7 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::page::{Page, CURRENT_PAGE_VERSION};
+use crate::page::{convert_image_paths_in_text, Page, CURRENT_PAGE_VERSION};
 use crate::storage;
 use crate::{dropbox, dropbox::AccessToken};
 
@@ -44,17 +44,40 @@ impl<'a> Context<'a> {
     }
 }
 
-fn parse_page(text: String) -> (String, String) {
+fn parse_page(
+    text: String,
+    image_prefix: &str,
+) -> Result<(String, String, Vec<(PathBuf, String)>), String> {
+    if text.trim().is_empty() {
+        return Err(String::from("キャンセルされました"));
+    }
+
     let mut iter = text.chars();
 
     // 最初の行をタイトルとして取得する
     let title: String = iter.by_ref().take_while(|&ch| ch != '\n').collect();
     let title = title.trim();
+    if title.is_empty() {
+        return Err(String::from("タイトルが空です"));
+    }
+
     // 本文
     let text: String = iter.collect();
     let text = text.trim();
 
-    (title.to_string(), text.to_string())
+    let (text, images) = convert_image_paths_in_text(text, |s| {
+        if s.starts_with(image_prefix) {
+            s.to_string()
+        } else {
+            format!("{}{}", image_prefix, s)
+        }
+    });
+
+    Ok((title.to_string(), text.to_string(), images))
+}
+
+fn generate_image_prefix(created_at: &DateTime<Utc>) -> String {
+    created_at.format("%Y-%m-%d_%H-%M-%S-%f_").to_string()
 }
 
 const TEMP_FILE_TO_EDIT: &str = "new_page.md";
@@ -162,13 +185,15 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
         }
     };
 
-    let (title, text) = parse_page(text);
+    let image_prefix = generate_image_prefix(&created_at);
 
-    // 取得したタイトルが空だったらエラー
-    if title.is_empty() {
-        eprintln!("タイトルを取得できませんでした");
-        return Ok(());
-    }
+    let (title, text, images) = match parse_page(text, &image_prefix) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            return Ok(());
+        }
+    };
 
     let page = Page {
         id: Uuid::new_v4().to_string(),
@@ -180,6 +205,21 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
     };
 
     // 書き込み
+    for (original_path, file_name) in &images {
+        if !original_path.exists() {
+            eprintln!(
+                "画像ファイル `{}` が存在しません",
+                original_path.to_string_lossy()
+            );
+            return Ok(());
+        } else {
+            if let Err(err) = storage::write_image(&ctx.directory, original_path, file_name) {
+                eprintln!("画像の書き込みに失敗しました: {}", err);
+                return Err(From::from(err));
+            }
+        }
+    }
+
     if let Err(err) = storage::write(&ctx.directory, page) {
         eprintln!("ページの書き込みに失敗しました: {}", err);
         return Err(From::from(err));
@@ -320,7 +360,15 @@ pub fn amend(ctx: Context) -> Result<(), failure::Error> {
         }
     };
 
-    let (title, text) = parse_page(text);
+    let image_prefix = generate_image_prefix(&last_page.created_at);
+
+    let (title, text, images) = match parse_page(text, &image_prefix) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            return Ok(());
+        }
+    };
 
     // タイトルが空だったらエラー
     if title.is_empty() {
@@ -333,6 +381,20 @@ pub fn amend(ctx: Context) -> Result<(), failure::Error> {
     last_page.updated_at.push(Utc::now());
 
     // 書き込み
+    for (original_path, file_name) in &images {
+        if original_path.exists() {
+            if let Err(err) = storage::write_image(&ctx.directory, original_path, file_name) {
+                eprintln!("画像の書き込みに失敗しました: {}", err);
+                return Err(From::from(err));
+            }
+        } else {
+            eprintln!(
+                "画像ファイル `{}` が存在しなかったため無視しました",
+                original_path.to_string_lossy()
+            );
+        }
+    }
+
     if let Err(err) = storage::write(&ctx.directory, last_page) {
         eprintln!("ページの書き込みに失敗しました: {}", err);
         return Err(From::from(err));

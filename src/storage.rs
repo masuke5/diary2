@@ -15,6 +15,8 @@ use crate::{
 
 pub const PAGE_DIR: &str = "pages";
 pub const PAGES_DIR_ON_DROPBOX: &str = "/pages";
+pub const IMAGE_DIR: &str = "images";
+pub const IMAGE_DIR_ON_DROPBOX: &str = "/images";
 pub const BACKUP_DIR_PREFIX: &str = "backup";
 
 // 日曜日と土曜日の日付を取得
@@ -87,6 +89,24 @@ pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
 
     let file = File::create(&filepath)?;
     serde_json::to_writer(file, &week_page)?;
+
+    Ok(())
+}
+
+pub fn write_image(
+    directory: &Path,
+    image_path: &Path,
+    file_name: &str,
+) -> Result<(), failure::Error> {
+    let ext = image_path
+        .extension()
+        .map_or(String::new(), |ext| ext.to_string_lossy().to_string());
+
+    let dest = directory
+        .join(IMAGE_DIR)
+        .join(&format!("{}.{}", file_name, ext));
+
+    fs::copy(image_path, dest)?;
 
     Ok(())
 }
@@ -171,6 +191,7 @@ pub fn sync(
     access_token: &AccessToken,
 ) -> Result<(), failure::Error> {
     dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX)?;
+    dropbox::create_folder(client, access_token, IMAGE_DIR_ON_DROPBOX)?;
 
     let files_on_dropbox = dropbox::list_files(client, access_token, PAGES_DIR_ON_DROPBOX)?;
 
