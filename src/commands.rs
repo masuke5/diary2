@@ -1,17 +1,17 @@
+use chrono::{Datelike, Local, NaiveDate, TimeZone, Utc};
+use clap::ArgMatches;
+use colored::*;
+use failure;
+use reqwest::Client;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use clap::ArgMatches;
-use failure;
-use chrono::{Utc, Local, NaiveDate, TimeZone, Datelike};
-use colored::*;
-use reqwest::Client;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::storage;
 use crate::page::{Page, CURRENT_PAGE_VERSION};
+use crate::storage;
 use crate::{dropbox, dropbox::AccessToken};
 
 #[allow(dead_code)]
@@ -77,7 +77,10 @@ fn execute_editor(editor: &str, filepath: &Path) -> Result<bool, failure::Error>
 }
 
 pub fn config(ctx: Context) -> Result<(), failure::Error> {
-    let editor = ctx.subcommand_matches.value_of("editor").unwrap_or(&ctx.config.editor);
+    let editor = ctx
+        .subcommand_matches
+        .value_of("editor")
+        .unwrap_or(&ctx.config.editor);
 
     // エディタを起動
     if let Err(err) = execute_editor(editor, &ctx.config_path) {
@@ -91,12 +94,21 @@ pub fn config(ctx: Context) -> Result<(), failure::Error> {
 pub fn print_page_headers<I: Iterator<Item = Page>>(iter: I) {
     for page in iter {
         let local = page.created_at.with_timezone(&Local);
-        println!("{} {}", page.title, format!("{}", local.format("%Y/%m/%d %H:%M")).yellow());
+        println!(
+            "{} {}",
+            page.title,
+            format!("{}", local.format("%Y/%m/%d %H:%M")).yellow()
+        );
     }
 }
 
 fn print_page(page: &Page) {
-    let formatted = format!("{}", page.created_at.with_timezone(&Local).format("%Y/%m/%d %H:%M"));
+    let formatted = format!(
+        "{}",
+        page.created_at
+            .with_timezone(&Local)
+            .format("%Y/%m/%d %H:%M")
+    );
 
     println!("## {} {}", page.title, formatted.yellow());
     println!("{}\n", page.text);
@@ -109,7 +121,7 @@ pub fn list(ctx: Context) -> Result<(), failure::Error> {
             Err(err) => {
                 eprintln!("--limitの値が数値ではありません");
                 return Err(From::from(err));
-            },
+            }
         },
         None => ctx.config.default_list_limit,
     };
@@ -119,7 +131,7 @@ pub fn list(ctx: Context) -> Result<(), failure::Error> {
         Err(err) => {
             eprintln!("ページの取得に失敗しました: {}", err);
             return Err(From::from(err));
-        },
+        }
     };
 
     print_page_headers(pages.into_iter());
@@ -147,7 +159,7 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
         Err(err) => {
             eprintln!("ファイルの読み込みに失敗しました: {}", err);
             return Err(From::from(err));
-        },
+        }
     };
 
     let (title, text) = parse_page(text);
@@ -182,7 +194,7 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
     Ok(())
 }
 
-pub fn lastdt(ctx: Context) -> Result<(), failure::Error>{ 
+pub fn lastdt(ctx: Context) -> Result<(), failure::Error> {
     // 最新のページを取得
     let last_page: Page = match storage::list(&ctx.directory, 1) {
         Ok(pages) => match pages.into_iter().next() {
@@ -190,12 +202,12 @@ pub fn lastdt(ctx: Context) -> Result<(), failure::Error>{
             None => {
                 eprintln!("ページがありません");
                 return Ok(());
-            },
+            }
         },
         Err(err) => {
             eprintln!("ページの取得に失敗しました: {}", err);
             return Err(From::from(err));
-        },
+        }
     };
 
     println!("{}", last_page.created_at.to_rfc3339());
@@ -228,20 +240,18 @@ pub fn parse_date_str(s: &str) -> Option<NaiveDate> {
         3 => NaiveDate::from_ymd(values[0] as i32, values[1], values[2]),
         _ => return None,
     };
-    
+
     Some(date)
 }
 
 pub fn show(ctx: Context) -> Result<(), failure::Error> {
     let date_str = ctx.subcommand_matches.value_of("date");
     let date = match date_str {
-        Some(s) => {
-            match parse_date_str(s) {
-                Some(date) => date,
-                None => {
-                    eprintln!("日付を解析できませんでした");
-                    return Ok(());
-                },
+        Some(s) => match parse_date_str(s) {
+            Some(date) => date,
+            None => {
+                eprintln!("日付を解析できませんでした");
+                return Ok(());
             }
         },
         None => Utc::today().naive_local(),
@@ -252,10 +262,12 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
     // ページが存在する時のみ出力
     if let Some(week_page) = week_page {
         // 指定された日付のページだけ抽出
-        let mut pages = week_page.pages.into_iter()
+        let mut pages = week_page
+            .pages
+            .into_iter()
             .filter(|page| !page.hidden)
             .filter(|page| page.created_at.with_timezone(&Local).date().naive_local() == date);
-        
+
         if let Some(first_page) = pages.next() {
             println!("# {}\n", date.format("%Y/%m/%d"));
 
@@ -264,7 +276,6 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
                 print_page(&page);
             }
         }
-
     }
 
     Ok(())
@@ -278,12 +289,12 @@ pub fn amend(ctx: Context) -> Result<(), failure::Error> {
             None => {
                 eprintln!("ページがありません");
                 return Ok(());
-            },
+            }
         },
         Err(err) => {
             eprintln!("ページの取得に失敗しました: {}", err);
             return Err(From::from(err));
-        },
+        }
     };
 
     // 一時ファイルへ書き込み
@@ -306,9 +317,8 @@ pub fn amend(ctx: Context) -> Result<(), failure::Error> {
         Err(err) => {
             eprintln!("ファイルの読み込みに失敗しました: {}", err);
             return Err(From::from(err));
-        },
+        }
     };
-
 
     let (title, text) = parse_page(text);
 
@@ -332,7 +342,7 @@ pub fn amend(ctx: Context) -> Result<(), failure::Error> {
 }
 
 pub fn search(ctx: Context) -> Result<(), failure::Error> {
-    let query = ctx.subcommand_matches.value_of("query").unwrap();   
+    let query = ctx.subcommand_matches.value_of("query").unwrap();
     let should_search_by_title_only = ctx.subcommand_matches.is_present("title");
     let should_search_by_text_only = ctx.subcommand_matches.is_present("text");
     let should_show_first_page = ctx.subcommand_matches.is_present("show-first");
@@ -345,7 +355,7 @@ pub fn search(ctx: Context) -> Result<(), failure::Error> {
                 Err(err) => {
                     eprintln!("--limitの値が数値ではありません");
                     return Err(From::from(err));
-                },
+                }
             },
             None => ctx.config.default_list_limit,
         }
@@ -370,7 +380,7 @@ pub fn search(ctx: Context) -> Result<(), failure::Error> {
         Err(err) => {
             eprintln!("ページの取得に失敗しました: {}", err);
             return Err(From::from(err));
-        },
+        }
     };
 
     if should_show_first_page {
@@ -392,9 +402,9 @@ pub fn auth(ctx: Context) -> Result<(), failure::Error> {
         Err(err) => {
             eprintln!("アクセストークンの取得に失敗しました: {}", err);
             return Err(err.into());
-        },
+        }
     };
-    
+
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
     if let Err(err) = fs::write(path, &access_token.value) {
         eprintln!("アクセストークンの保存に失敗しました: {}", err);
@@ -413,7 +423,7 @@ pub fn sync(ctx: Context) -> Result<(), failure::Error> {
         Err(err) => {
             eprintln!("バックアップの作成に失敗しました: {}", err);
             return Err(err.into());
-        },
+        }
     };
 
     // アクセストークンを取得
@@ -428,7 +438,7 @@ pub fn sync(ctx: Context) -> Result<(), failure::Error> {
             }
 
             return Err(err.into());
-        },
+        }
     };
     let access_token = AccessToken {
         value: access_token,
@@ -442,7 +452,7 @@ pub fn sync(ctx: Context) -> Result<(), failure::Error> {
                 eprintln!("バックアップの削除に失敗しました: {}", err);
                 return Err(err.into());
             }
-        },
+        }
         Err(err) => {
             eprintln!("同期に失敗しました: {}", err);
 
@@ -455,7 +465,7 @@ pub fn sync(ctx: Context) -> Result<(), failure::Error> {
             return Err(err.into());
         }
     };
-    
+
     Ok(())
 }
 
@@ -463,13 +473,13 @@ pub fn fixpage(ctx: Context) -> Result<(), failure::Error> {
     match (ctx.page_version, CURRENT_PAGE_VERSION) {
         (a, b) if a == b => {
             println!("変換は必要ありません");
-        },
+        }
         (1, 2) => {
             if let Err(err) = storage::fix_1_to_2(&ctx.directory) {
                 eprintln!("修正に失敗しました: {}", err);
                 return Err(err.into());
             }
-        },
+        }
         _ => unreachable!(),
     };
 

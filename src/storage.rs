@@ -1,14 +1,17 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::fs::{File, DirEntry};
-use std::cmp::Reverse;
 use crate::page::{Page, WeekPage, WeekPageV1};
-use chrono::{Date, Utc, Weekday, Datelike, TimeZone};
-use std::mem;
+use chrono::{Date, Datelike, TimeZone, Utc, Weekday};
 use failure;
+use std::cmp::Reverse;
+use std::fs;
+use std::fs::{DirEntry, File};
+use std::mem;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::{dropbox, dropbox::{AccessToken, FileInfo}};
+use crate::{
+    dropbox,
+    dropbox::{AccessToken, FileInfo},
+};
 
 pub const PAGE_DIR: &str = "pages";
 pub const PAGES_DIR_ON_DROPBOX: &str = "/pages";
@@ -37,7 +40,11 @@ fn find_week(day: &Date<Utc>) -> (Date<Utc>, Date<Utc>) {
 
 fn generate_page_filepath(directory: &Path, date: &Date<Utc>) -> PathBuf {
     let (week_begin, week_end) = find_week(date);
-    let filename = format!("{}-{}.json", week_begin.format("%Y-%m-%d"), week_end.format("%Y-%m-%d"));
+    let filename = format!(
+        "{}-{}.json",
+        week_begin.format("%Y-%m-%d"),
+        week_end.format("%Y-%m-%d")
+    );
     let filepath = directory.join(PAGE_DIR).join(&filename);
     filepath
 }
@@ -65,14 +72,20 @@ pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
     // syncコマンドでアップロードされるようにuploaded_atを消す
     week_page.uploaded_at = None;
 
-    match week_page.pages.iter().position(|old_page| page.created_at == old_page.created_at) {
-         // ページが存在したら更新 
-        Some(pos) => { mem::replace(&mut week_page.pages[pos], page); },
+    match week_page
+        .pages
+        .iter()
+        .position(|old_page| page.created_at == old_page.created_at)
+    {
+        // ページが存在したら更新
+        Some(pos) => {
+            mem::replace(&mut week_page.pages[pos], page);
+        }
         // 存在しなかったら追加する
         None => week_page.pages.push(page),
     };
 
-    let file = File::create(&filepath)?; 
+    let file = File::create(&filepath)?;
     serde_json::to_writer(file, &week_page)?;
 
     Ok(())
@@ -82,13 +95,21 @@ pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>, failure::Error> {
     list_with_filter(directory, limit, |_| true)
 }
 
-pub fn list_with_filter<F>(directory: &Path, limit: u32, filter: F) -> Result<Vec<Page>, failure::Error>
-    where F: Fn(&Page) -> bool {
+pub fn list_with_filter<F>(
+    directory: &Path,
+    limit: u32,
+    filter: F,
+) -> Result<Vec<Page>, failure::Error>
+where
+    F: Fn(&Page) -> bool,
+{
     // ページが格納されているディレクトリのファイルをすべて取得する
-    let mut entries: Vec<DirEntry> = directory.join(PAGE_DIR)
+    let mut entries: Vec<DirEntry> = directory
+        .join(PAGE_DIR)
         .read_dir()?
         .filter(|entry| entry.is_ok())
-        .map(|entry| entry.unwrap()).collect();
+        .map(|entry| entry.unwrap())
+        .collect();
     // ファイル名で降順にソート
     entries.sort_by_key(|entry| Reverse(entry.file_name()));
 
@@ -115,7 +136,10 @@ pub fn list_with_filter<F>(directory: &Path, limit: u32, filter: F) -> Result<Ve
     Ok(pages)
 }
 
-pub fn get_week_page(directory: &Path, date: &Date<Utc>) -> Result<Option<WeekPage>, failure::Error> {
+pub fn get_week_page(
+    directory: &Path,
+    date: &Date<Utc>,
+) -> Result<Option<WeekPage>, failure::Error> {
     let filepath = generate_page_filepath(directory, date);
     if !filepath.exists() {
         return Ok(None);
@@ -141,7 +165,11 @@ pub fn integrate(wpage1: WeekPage, wpage2: WeekPage) -> WeekPage {
     new_wpage
 }
 
-pub fn sync(directory: &Path, client: &reqwest::Client, access_token: &AccessToken) -> Result<(), failure::Error> {
+pub fn sync(
+    directory: &Path,
+    client: &reqwest::Client,
+    access_token: &AccessToken,
+) -> Result<(), failure::Error> {
     dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX)?;
 
     let files_on_dropbox = dropbox::list_files(client, access_token, PAGES_DIR_ON_DROPBOX)?;
@@ -152,28 +180,43 @@ pub fn sync(directory: &Path, client: &reqwest::Client, access_token: &AccessTok
         let entry = entry?;
 
         let wpage: WeekPage = serde_json::from_reader(File::open(entry.path())?)?;
-        let timestamp = wpage.uploaded_at.unwrap_or(Utc.ymd(1970, 1, 1).and_hms(0, 1, 1));
+        let timestamp = wpage
+            .uploaded_at
+            .unwrap_or(Utc.ymd(1970, 1, 1).and_hms(0, 1, 1));
         week_pages.push(wpage);
 
         files_on_local.push(FileInfo {
-            name: entry.path().as_path().file_name().unwrap().to_string_lossy().to_string(),
+            name: entry
+                .path()
+                .as_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string(),
             client_modified: timestamp,
         });
     }
 
     let pages_dir = directory.join(PAGE_DIR);
     let gen_path = |name: &str| {
-        (pages_dir.join(name), String::from(PAGES_DIR_ON_DROPBOX) + "/" + name)
+        (
+            pages_dir.join(name),
+            String::from(PAGES_DIR_ON_DROPBOX) + "/" + name,
+        )
     };
 
     for file_on_dropbox in &files_on_dropbox {
         let (local_path, dropbox_path) = gen_path(&file_on_dropbox.name);
-        let file_on_local = files_on_local.iter().zip(week_pages.iter()).find(|(file, _)| file_on_dropbox.name == file.name);
+        let file_on_local = files_on_local
+            .iter()
+            .zip(week_pages.iter())
+            .find(|(file, _)| file_on_dropbox.name == file.name);
 
         if let Some((file_on_local, wpage_on_local)) = file_on_local {
             // Dropbox上にもローカルにもファイルが存在して、タイムスタンプが異なっている場合は統合する
             if file_on_local.client_modified != file_on_dropbox.client_modified {
-                let (_, page_on_dropbox) = dropbox::download_file(client, access_token, &dropbox_path)?;
+                let (_, page_on_dropbox) =
+                    dropbox::download_file(client, access_token, &dropbox_path)?;
                 let wpage_on_dropbox: WeekPage = serde_json::from_str(&page_on_dropbox)?;
 
                 let mut wpage = integrate(wpage_on_dropbox, wpage_on_local.clone());
@@ -197,7 +240,9 @@ pub fn sync(directory: &Path, client: &reqwest::Client, access_token: &AccessTok
 
     for (file_on_local, mut wpage) in files_on_local.iter().zip(week_pages) {
         let (local_path, dropbox_path) = gen_path(&file_on_local.name);
-        let file_on_dropbox = files_on_dropbox.iter().find(|file| file_on_local.name == file.name);
+        let file_on_dropbox = files_on_dropbox
+            .iter()
+            .find(|file| file_on_local.name == file.name);
 
         // ローカルに存在するファイルがDropbox上に存在しない場合はアップロードする
         if file_on_dropbox.is_none() {
@@ -289,21 +334,26 @@ pub fn remove_pages_backup(directory: &Path, id: u32) -> Result<(), failure::Err
 
 fn convert_week_page_v1_to_v2(wpage: WeekPageV1) -> WeekPage {
     WeekPage {
-        pages: wpage.pages.into_iter().map(|v1| Page {
-            id: Uuid::new_v4().to_string(),
-            title: v1.title,
-            text: v1.text,
-            hidden: v1.hidden,
-            created_at: v1.created_at,
-            updated_at: v1.updated_at,
-        }).collect(),
+        pages: wpage
+            .pages
+            .into_iter()
+            .map(|v1| Page {
+                id: Uuid::new_v4().to_string(),
+                title: v1.title,
+                text: v1.text,
+                hidden: v1.hidden,
+                created_at: v1.created_at,
+                updated_at: v1.updated_at,
+            })
+            .collect(),
         uploaded_at: wpage.uploaded_at,
     }
 }
 
 pub fn fix_1_to_2(directory: &Path) -> Result<(), failure::Error> {
     // ページが格納されているディレクトリのファイルをすべて取得する
-    let entries = directory.join(PAGE_DIR)
+    let entries = directory
+        .join(PAGE_DIR)
         .read_dir()?
         .filter(|entry| entry.is_ok())
         .map(|entry| entry.unwrap());
