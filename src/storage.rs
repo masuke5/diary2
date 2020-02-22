@@ -1,23 +1,50 @@
 use crate::page::{Page, WeekPage, WeekPageV1};
-use chrono::{Date, Datelike, TimeZone, Utc, Weekday};
+use chrono::{Date, Datelike, Utc, Weekday};
 use failure;
 use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::{DirEntry, File};
 use std::mem;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::{
-    dropbox,
-    dropbox::{AccessToken, FileInfo},
-};
+use crate::dropbox;
+use crate::dropbox::AccessToken;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EditedEntries {
+    page_files: HashSet<String>,
+    image_files: HashSet<String>,
+}
+
+impl EditedEntries {
+    fn new() -> Self {
+        EditedEntries {
+            page_files: HashSet::new(),
+            image_files: HashSet::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.page_files.clear();
+        self.image_files.clear();
+    }
+}
+
+#[derive(Debug)]
+struct FileState {
+    exists_on_local: bool,
+    exists_on_remote: bool,
+    is_edited: bool,
+}
 
 pub const PAGE_DIR: &str = "pages";
 pub const PAGES_DIR_ON_DROPBOX: &str = "/pages";
 pub const IMAGE_DIR: &str = "images";
 pub const IMAGE_DIR_ON_DROPBOX: &str = "/images";
 pub const BACKUP_DIR_PREFIX: &str = "backup";
+pub const EDITED_ENTRIES_FILE: &str = "edited_entries.json";
 
 // 日曜日と土曜日の日付を取得
 fn find_week(day: &Date<Utc>) -> (Date<Utc>, Date<Utc>) {
@@ -49,6 +76,33 @@ fn generate_page_filepath(directory: &Path, date: &Date<Utc>) -> PathBuf {
     );
     let filepath = directory.join(PAGE_DIR).join(&filename);
     filepath
+}
+
+fn get_edited_entries(directory: &Path) -> Result<EditedEntries, failure::Error> {
+    let file_path = directory.join(EDITED_ENTRIES_FILE);
+
+    if file_path.exists() {
+        let file = File::open(&file_path)?;
+        let entries: EditedEntries = serde_json::from_reader(file)?;
+        Ok(entries)
+    } else {
+        Ok(EditedEntries::new())
+    }
+}
+
+fn update_edited_entries<F>(directory: &Path, edit: F) -> Result<(), failure::Error>
+where
+    F: FnOnce(&mut EditedEntries),
+{
+    let mut entries = get_edited_entries(directory)?;
+
+    edit(&mut entries);
+
+    let file_path = directory.join(EDITED_ENTRIES_FILE);
+    let file = File::create(&file_path)?;
+    serde_json::to_writer(file, &entries)?;
+
+    Ok(())
 }
 
 pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
@@ -87,6 +141,12 @@ pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
         None => week_page.pages.push(page),
     };
 
+    update_edited_entries(directory, |entries| {
+        entries
+            .page_files
+            .insert(filepath.file_name().unwrap().to_string_lossy().to_string());
+    })?;
+
     let file = File::create(&filepath)?;
     serde_json::to_writer(file, &week_page)?;
 
@@ -98,13 +158,15 @@ pub fn write_image(
     image_path: &Path,
     file_name: &str,
 ) -> Result<(), failure::Error> {
-    let ext = image_path
-        .extension()
-        .map_or(String::new(), |ext| ext.to_string_lossy().to_string());
-
     let dest = directory
         .join(IMAGE_DIR)
-        .join(&format!("{}.{}", file_name, ext));
+        .join(file_name);
+
+    update_edited_entries(directory, |entries| {
+        entries
+            .image_files
+            .insert(dest.file_name().unwrap().to_string_lossy().to_string());
+    })?;
 
     fs::copy(image_path, dest)?;
 
@@ -185,6 +247,56 @@ pub fn integrate(wpage1: WeekPage, wpage2: WeekPage) -> WeekPage {
     new_wpage
 }
 
+fn get_file_map<'a, IR>(
+    local_files_dir: &Path,
+    edited_files: &HashSet<String>,
+    files_on_remote: IR,
+) -> Result<HashMap<String, FileState>, failure::Error>
+where
+    IR: Iterator<Item = &'a str>,
+{
+    let mut result = HashMap::default();
+
+    for file_name in files_on_remote {
+        let exists_on_local = local_files_dir.join(file_name).exists();
+        if exists_on_local {
+            if edited_files.contains(file_name) {
+                result.insert(
+                    file_name.to_string(),
+                    FileState {
+                        exists_on_local: true,
+                        exists_on_remote: true,
+                        is_edited: true,
+                    },
+                );
+            }
+        } else {
+            assert!(!edited_files.contains(file_name));
+
+            result.insert(
+                file_name.to_string(),
+                FileState {
+                    exists_on_local: false,
+                    exists_on_remote: true,
+                    is_edited: false,
+                },
+            );
+        }
+    }
+
+    for file_name in edited_files {
+        assert!(local_files_dir.join(file_name).exists());
+
+        result.entry(file_name.to_string()).or_insert(FileState {
+            exists_on_local: true,
+            exists_on_remote: false,
+            is_edited: true,
+        });
+    }
+
+    Ok(result)
+}
+
 pub fn sync(
     directory: &Path,
     client: &reqwest::Client,
@@ -193,89 +305,122 @@ pub fn sync(
     dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX)?;
     dropbox::create_folder(client, access_token, IMAGE_DIR_ON_DROPBOX)?;
 
-    let files_on_dropbox = dropbox::list_files(client, access_token, PAGES_DIR_ON_DROPBOX)?;
+    let edited_entries = get_edited_entries(directory)?;
 
-    let mut files_on_local = Vec::new();
-    let mut week_pages = Vec::new();
-    for entry in fs::read_dir(directory.join(PAGE_DIR))? {
-        let entry = entry?;
+    // ページファイルを同期
 
-        let wpage: WeekPage = serde_json::from_reader(File::open(entry.path())?)?;
-        let timestamp = wpage
-            .uploaded_at
-            .unwrap_or(Utc.ymd(1970, 1, 1).and_hms(0, 1, 1));
-        week_pages.push(wpage);
+    let page_files_on_remote = dropbox::list_files(client, access_token, PAGES_DIR_ON_DROPBOX)?;
 
-        files_on_local.push(FileInfo {
-            name: entry
-                .path()
-                .as_path()
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string(),
-            client_modified: timestamp,
-        });
-    }
+    let page_dir = directory.join(PAGE_DIR);
+    let file_map = get_file_map(
+        &page_dir,
+        &edited_entries.page_files,
+        page_files_on_remote.iter().map(|f| f.name.as_ref()),
+    )?;
 
-    let pages_dir = directory.join(PAGE_DIR);
-    let gen_path = |name: &str| {
-        (
-            pages_dir.join(name),
-            String::from(PAGES_DIR_ON_DROPBOX) + "/" + name,
-        )
-    };
+    for (file_name, state) in file_map {
+        let path_to_remote = format!("{}/{}", PAGES_DIR_ON_DROPBOX, file_name);
+        let path_to_local = page_dir.join(&file_name);
 
-    for file_on_dropbox in &files_on_dropbox {
-        let (local_path, dropbox_path) = gen_path(&file_on_dropbox.name);
-        let file_on_local = files_on_local
-            .iter()
-            .zip(week_pages.iter())
-            .find(|(file, _)| file_on_dropbox.name == file.name);
+        match (
+            state.exists_on_local,
+            state.exists_on_remote,
+            state.is_edited,
+        ) {
+            // ダウンロード
+            (false, true, false) => {
+                println!("{}をダウンロードしています...", file_name);
 
-        if let Some((file_on_local, wpage_on_local)) = file_on_local {
-            // Dropbox上にもローカルにもファイルが存在して、タイムスタンプが異なっている場合は統合する
-            if file_on_local.client_modified != file_on_dropbox.client_modified {
-                let (_, page_on_dropbox) =
-                    dropbox::download_file(client, access_token, &dropbox_path)?;
-                let wpage_on_dropbox: WeekPage = serde_json::from_str(&page_on_dropbox)?;
+                let (_, content) = dropbox::download_file(client, access_token, &path_to_remote)?;
 
-                let mut wpage = integrate(wpage_on_dropbox, wpage_on_local.clone());
+                fs::write(&path_to_local, content)?;
+            }
+            // アップロード
+            (true, false, true) => {
+                println!("{}をアップロードしています...", file_name);
 
-                // 双方のファイルを更新する
-                println!("{}を更新しています...", file_on_dropbox.name);
+                // アップロード日時を更新してからJSONに変換
+                let file = File::open(&path_to_local)?;
+                let mut wpage: WeekPage = serde_json::from_reader(file)?;
+                wpage.uploaded_at = Some(Utc::now());
 
                 let json = serde_json::to_string(&wpage)?;
-                let info = dropbox::upload_file(client, access_token, &dropbox_path, json)?;
 
-                wpage.uploaded_at = Some(info.client_modified);
-                serde_json::to_writer(File::create(&local_path)?, &wpage)?;
+                // アップロード
+                dropbox::upload_file(client, access_token, &path_to_remote, json)?;
             }
-        } else {
-            // Dropbox上に存在するファイルがローカルに存在しない場合はダウンロードする
-            println!("{}をダウンロードしています...", file_on_dropbox.name);
-            let (_, contents) = dropbox::download_file(client, access_token, &dropbox_path)?;
-            fs::write(local_path, &contents)?;
+            // 統合して双方を更新
+            (true, true, true) => {
+                println!("{}を更新しています...", file_name);
+
+                // ローカルのページを読み込む
+                let file = File::open(&path_to_local)?;
+                let wpage_on_local: WeekPage = serde_json::from_reader(file)?;
+
+                // リモートのページを読み込む
+                let (_, content) =
+                    dropbox::download_file_to_string(client, access_token, &path_to_remote)?;
+                let wpage_on_remote = serde_json::from_str(&content)?;
+
+                // 統合して、アップロード日時を更新
+                let mut wpage = integrate(wpage_on_local, wpage_on_remote);
+                wpage.uploaded_at = Some(Utc::now());
+
+                let json = serde_json::to_string(&wpage)?;
+
+                // ローカルのファイルを更新
+                fs::write(&path_to_local, &json)?;
+
+                // リモートのファイルを更新
+                dropbox::upload_file(client, access_token, &path_to_remote, json)?;
+            }
+            (a, b, c) => unreachable!("({}, {}, {})", a, b, c),
         }
     }
 
-    for (file_on_local, mut wpage) in files_on_local.iter().zip(week_pages) {
-        let (local_path, dropbox_path) = gen_path(&file_on_local.name);
-        let file_on_dropbox = files_on_dropbox
-            .iter()
-            .find(|file| file_on_local.name == file.name);
+    // 画像ファイルを同期
 
-        // ローカルに存在するファイルがDropbox上に存在しない場合はアップロードする
-        if file_on_dropbox.is_none() {
-            println!("{}をアップロードしています...", file_on_local.name);
-            let json = serde_json::to_string(&wpage)?;
-            let info = dropbox::upload_file(client, access_token, &dropbox_path, json)?;
+    let image_files_on_remote = dropbox::list_files(client, access_token, IMAGE_DIR_ON_DROPBOX)?;
 
-            // アップロード日時を更新
-            wpage.uploaded_at = Some(info.client_modified);
-            serde_json::to_writer(File::create(&local_path)?, &wpage)?;
+    let image_dir = directory.join(IMAGE_DIR);
+    let file_map = get_file_map(
+        &image_dir,
+        &edited_entries.image_files,
+        image_files_on_remote.iter().map(|f| f.name.as_ref()),
+    )?;
+
+    for (file_name, state) in file_map {
+        let path_to_remote = format!("{}/{}", IMAGE_DIR_ON_DROPBOX, file_name);
+        let path_to_local = image_dir.join(&file_name);
+
+        match (
+            state.exists_on_local,
+            state.exists_on_remote,
+            state.is_edited,
+        ) {
+            // ダウンロード
+            (false, true, false) => {
+                println!("{}をダウンロードしています...", file_name);
+
+                let (_, content) = dropbox::download_file(client, access_token, &path_to_remote)?;
+                fs::write(&path_to_local, content)?;
+            }
+            // ローカルの画像を優先する。
+            // 選択できるようしてもよいかもしれない
+            (true, true, true) |
+            // アップロード
+            (true, false, true) => {
+                println!("{}をアップロードしています...", file_name);
+
+                let image = fs::read(&path_to_local)?;
+                dropbox::upload_file(client, access_token, &path_to_remote, image)?;
+            },
+            (a, b, c) => unreachable!("({}, {}, {})", a, b, c),
         }
     }
+
+    // 更新済みリストを空にする
+    update_edited_entries(directory, EditedEntries::clear)?;
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, BufRead, BufReader, Write};
 use std::net::TcpListener;
 
 use chrono::{DateTime, Utc};
@@ -98,16 +98,25 @@ pub struct FileInfo {
     pub client_modified: DateTime<Utc>,
 }
 
-pub fn download_file(
+pub fn download_file_to_string(
     client: &Client,
     access_token: &AccessToken,
     path: &str,
 ) -> Result<(FileInfo, String), failure::Error> {
+    let (info, bytes) = download_file(client, access_token, path)?;
+    Ok((info, String::from_utf8_lossy(&bytes).to_string()))
+}
+
+pub fn download_file(
+    client: &Client,
+    access_token: &AccessToken,
+    path: &str,
+) -> Result<(FileInfo, Vec<u8>), failure::Error> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
     let json = serde_json::to_string(&parameters)?;
 
-    let mut res = client
+    let res = client
         .post("https://content.dropboxapi.com/2/files/download")
         .header(
             header::AUTHORIZATION,
@@ -118,16 +127,19 @@ pub fn download_file(
 
     let info: FileInfo =
         serde_json::from_str(res.headers().get("Dropbox-API-Result").unwrap().to_str()?)?;
-    let contents = res.text()?;
+
+    let mut contents = Vec::new();
+    let mut res = BufReader::new(res);
+    res.read_to_end(&mut contents)?;
 
     Ok((info, contents))
 }
 
-pub fn upload_file(
+pub fn upload_file<B: Into<reqwest::Body>>(
     client: &Client,
     access_token: &AccessToken,
     path: &str,
-    contents: String,
+    contents: B,
 ) -> Result<FileInfo, failure::Error> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
