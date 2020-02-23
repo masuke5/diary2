@@ -6,6 +6,7 @@ use reqwest::Client;
 use std::borrow::Cow;
 use std::fs;
 use std::io;
+use std::iter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -450,33 +451,51 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
                 return Ok(());
             }
         },
-        None => Utc::today().naive_local(),
+        None => Local::today().naive_local(),
     };
 
+    let datetime = date.and_hms(0, 0, 0);
+    let datetime = Local
+        .from_local_datetime(&datetime)
+        .unwrap()
+        .with_timezone(&Utc);
+
     // 指定された日付の週のページを取得
-    let week_page = storage::get_week_page(&ctx.directory, &Utc.from_local_date(&date).unwrap())?;
-    // ページが存在する時のみ出力
-    if let Some(week_page) = week_page {
+    let week_pages = storage::get_week_page_range(
+        &ctx.directory,
+        &datetime,
+        &(datetime + chrono::Duration::days(1)),
+    )?;
+
+    let mut pages: Box<dyn Iterator<Item = Page>> = Box::new(iter::empty());
+
+    for week_page in week_pages {
         // 指定された日付のページだけ抽出
-        let mut pages = week_page
-            .pages
-            .into_iter()
-            .filter(|page| !page.hidden)
-            .filter(|page| page.created_at.with_timezone(&Local).date().naive_local() == date);
+        pages = Box::new(
+            pages.chain(
+                week_page
+                    .pages
+                    .into_iter()
+                    .filter(|page| !page.hidden)
+                    .filter(|page| {
+                        page.created_at.with_timezone(&Local).date().naive_local() == date
+                    }),
+            ),
+        );
+    }
 
-        if ctx.subcommand_matches.is_present("stdout") {
-            if let Some(first_page) = pages.next() {
-                println!("# {}\n", date.format("%Y/%m/%d"));
+    if ctx.subcommand_matches.is_present("stdout") {
+        if let Some(first_page) = pages.next() {
+            println!("# {}\n", date.format("%Y/%m/%d"));
 
-                print_page(&first_page);
-                for page in pages {
-                    print_page(&page);
-                }
+            print_page(&first_page);
+            for page in pages {
+                print_page(&page);
             }
-        } else {
-            let html = pages_to_html(&ctx.directory, &date, pages);
-            show_with_browser(&ctx.directory, &html)?;
         }
+    } else {
+        let html = pages_to_html(&ctx.directory, &date, pages);
+        show_with_browser(&ctx.directory, &html)?;
     }
 
     Ok(())

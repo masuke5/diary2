@@ -1,5 +1,5 @@
 use crate::page::{Page, WeekPage, WeekPageV1};
-use chrono::{Date, Datelike, Utc, Weekday};
+use chrono::{Date, DateTime, Datelike, Duration, Utc, Weekday};
 use failure;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -158,9 +158,7 @@ pub fn write_image(
     image_path: &Path,
     file_name: &str,
 ) -> Result<(), failure::Error> {
-    let dest = directory
-        .join(IMAGE_DIR)
-        .join(file_name);
+    let dest = directory.join(IMAGE_DIR).join(file_name);
 
     update_edited_entries(directory, |entries| {
         entries
@@ -218,19 +216,39 @@ where
     Ok(pages)
 }
 
-pub fn get_week_page(
+pub fn get_week_page_range(
     directory: &Path,
-    date: &Date<Utc>,
-) -> Result<Option<WeekPage>, failure::Error> {
-    let filepath = generate_page_filepath(directory, date);
-    if !filepath.exists() {
-        return Ok(None);
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+) -> Result<Vec<WeekPage>, failure::Error> {
+    if start > end {
+        return Ok(Vec::new());
     }
 
-    let file = File::open(filepath)?;
+    let mut date = start.date();
+    let end = end.date();
+    let mut wpages = Vec::with_capacity((end - date).num_weeks() as usize);
+    let mut last_file_path = None;
 
-    let week_page: WeekPage = serde_json::from_reader(file)?;
-    Ok(Some(week_page))
+    while date <= end {
+        let file_path = generate_page_filepath(directory, &date);
+        let file = File::open(&file_path)?;
+        let wpage: WeekPage = serde_json::from_reader(&file)?;
+        wpages.push(wpage);
+
+        date = date + Duration::days(7);
+        last_file_path = Some(file_path.clone());
+    }
+
+    let last_file_path = last_file_path.unwrap();
+    let file_path = generate_page_filepath(directory, &end);
+    if last_file_path != file_path {
+        let file = File::open(&file_path)?;
+        let wpage: WeekPage = serde_json::from_reader(&file)?;
+        wpages.push(wpage);
+    }
+
+    Ok(wpages)
 }
 
 pub fn integrate(wpage1: WeekPage, wpage2: WeekPage) -> WeekPage {
