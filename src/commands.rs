@@ -432,11 +432,11 @@ where
     html
 }
 
-fn show_with_browser(directory: &Path, s: &str) -> Result<(), failure::Error> {
+fn show_with_browser(directory: &Path, command: Option<&str>, s: &str) -> Result<(), failure::Error> {
     let file_path = directory.join(FILE_FOR_SHOWING);
     fs::write(&file_path, s)?;
 
-    open_file_with_associated(&file_path, None)?;
+    open_file_with_associated(&file_path, command)?;
 
     Ok(())
 }
@@ -495,7 +495,7 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
         }
     } else {
         let html = pages_to_html(&ctx.directory, &date, pages);
-        show_with_browser(&ctx.directory, &html)?;
+        show_with_browser(&ctx.directory, ctx.config.browser.as_ref().map(|s| s.as_ref()), &html)?;
     }
 
     Ok(())
