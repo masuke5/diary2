@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::fs::File;
+use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -22,18 +23,16 @@ use toml;
 const CONFIG_FILE: &str = "config.toml";
 const PAGE_VERSION_FILE: &str = "page_version";
 
-fn load_config(config_file_path: &Path) -> Result<Config, String> {
+fn load_config(config_file_path: &Path) -> Result<Config, failure::Error> {
     if !config_file_path.exists() {
         return Ok(Config::default());
     }
 
-    let mut config_file = File::open(config_file_path).map_err(|err| format!("{}", err))?;
+    let mut config_file = File::open(config_file_path)?;
     let mut toml_str = String::new();
-    config_file
-        .read_to_string(&mut toml_str)
-        .map_err(|err| format!("{}", err))?;
+    config_file.read_to_string(&mut toml_str)?;
 
-    let config: Config = toml::from_str(&toml_str).map_err(|err| format!("{}", err))?;
+    let config: Config = toml::from_str(&toml_str)?;
     Ok(config)
 }
 
@@ -78,16 +77,6 @@ fn main() {
 
     let page_version = get_page_version(&directory);
 
-    // 設定ファイルを読み込む
-    let config_file_path = directory.join(CONFIG_FILE);
-    let config = match load_config(&config_file_path) {
-        Ok(config) => config,
-        Err(err) => {
-            println!("設定ファイルの読み込みに失敗しました: {}", err);
-            process::exit(1);
-        }
-    };
-
     let matches = App::new("diary2")
         .version("1.1.2")
         .subcommand(
@@ -129,6 +118,30 @@ fn main() {
         .subcommand(SubCommand::with_name("sync"))
         .subcommand(SubCommand::with_name("fixpage"))
         .get_matches();
+
+    // 設定ファイルを読み込む
+    let config_file_path = directory.join(CONFIG_FILE);
+    let config = match load_config(&config_file_path) {
+        Ok(config) => config,
+        Err(err) => {
+            if matches.subcommand_matches("config").is_some() {
+                eprintln!("設定ファイルの読み込みに失敗したため、デフォルトの設定で続行します。");
+                eprintln!("詳細: {}", err);
+                Config::default()
+            } else {
+                if let Some(err) = err.downcast_ref::<io::Error>() {
+                    eprintln!("設定ファイルの読み込みに失敗しました: {}", err);
+                } else if let Some(err) = err.downcast_ref::<toml::de::Error>() {
+                    eprintln!("設定ファイルのパースに失敗しました: {}", err);
+                    eprintln!("`diary2 config` を実行して設定を修正してください。");
+                } else {
+                    eprintln!("設定の読み込みに失敗しました: {}", err);
+                }
+
+                process::exit(1);
+            }
+        }
+    };
 
     let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> =
         HashMap::new();
