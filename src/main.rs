@@ -99,7 +99,11 @@ fn main() {
             SubCommand::with_name("new").arg(Arg::with_name("hidden").long("hidden").short("d")),
         )
         .subcommand(SubCommand::with_name("lastdt"))
-        .subcommand(SubCommand::with_name("show").arg(Arg::with_name("date").index(1)))
+        .subcommand(
+            SubCommand::with_name("show")
+                .arg(Arg::with_name("date").index(1))
+                .arg(Arg::with_name("stdout").long("stdout").short("s")),
+        )
         .subcommand(
             SubCommand::with_name("search")
                 .arg(Arg::with_name("query").index(1))
