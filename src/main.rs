@@ -84,7 +84,7 @@ fn main() {
     let page_version = get_page_version(&directory);
 
     let matches = App::new("diary2")
-        .version("1.1.2")
+        .version("1.2.0")
         .subcommand(
             SubCommand::with_name("config").about("edit config").arg(
                 Arg::with_name("editor")
