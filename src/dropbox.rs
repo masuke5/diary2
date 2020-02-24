@@ -205,7 +205,7 @@ pub fn create_folder(
         .send()?;
 
     let j: reqwest::Result<serde_json::Value> = res.json();
-    if let Err(_) = j {
+    if j.is_err() {
         eprintln!("フォルダの作成に失敗しました: {}", res.text()?);
     }
 

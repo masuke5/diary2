@@ -47,10 +47,14 @@ impl<'a> Context<'a> {
     }
 }
 
-fn parse_page(
+#[derive(Debug, Clone)]
+struct ParsedPage {
+    title: String,
     text: String,
-    image_prefix: &str,
-) -> Result<(String, String, Vec<(PathBuf, String)>)> {
+    images: Vec<(PathBuf, String)>,
+}
+
+fn parse_page(text: String, image_prefix: &str) -> Result<ParsedPage> {
     if text.trim().is_empty() {
         return Err(anyhow!("キャンセルされました"));
     }
@@ -76,7 +80,11 @@ fn parse_page(
         }
     });
 
-    Ok((title.to_string(), text.to_string(), images))
+    Ok(ParsedPage {
+        title: title.to_string(),
+        text: text.to_string(),
+        images,
+    })
 }
 
 fn generate_image_prefix(created_at: &DateTime<Utc>) -> String {
@@ -209,29 +217,28 @@ pub fn new(ctx: Context) -> Result<()> {
 
     let image_prefix = generate_image_prefix(&created_at);
 
-    let (title, text, images) =
-        parse_page(text, &image_prefix).context("ページのパースに失敗しました")?;
+    let parsed_page = parse_page(text, &image_prefix).context("ページのパースに失敗しました")?;
 
     let page = Page {
         id: Uuid::new_v4().to_string(),
-        title,
-        text,
+        title: parsed_page.title,
+        text: parsed_page.text,
         hidden,
         created_at,
         updated_at: vec![Utc::now()],
     };
 
     // 画像をコピー
-    for (original_path, file_name) in &images {
+    for (original_path, file_name) in parsed_page.images {
         if !original_path.exists() {
             return Err(anyhow!(
                 "`{}` が存在しません",
                 original_path.to_string_lossy()
             ));
         } else {
-            storage::write_image(&ctx.directory, original_path, file_name).with_context(|| {
-                format!("`{}` の書き込みに失敗しました", original_path.display())
-            })?;
+            storage::write_image(&ctx.directory, &original_path, &file_name).with_context(
+                || format!("`{}` の書き込みに失敗しました", original_path.display()),
+            )?;
         }
     }
 
@@ -322,7 +329,7 @@ fn escape(raw: &str) -> Cow<str> {
     }
 }
 
-fn pages_to_html<I>(directory: &Path, date: &NaiveDate, pages: I) -> String
+fn pages_to_html<I>(directory: &Path, date: NaiveDate, pages: I) -> String
 where
     I: Iterator<Item = Page>,
 {
@@ -420,7 +427,7 @@ fn show_with_browser(directory: &Path, command: Option<&str>, s: &str) -> Result
 fn show_page_with_browser<I>(
     directory: &Path,
     command: Option<&str>,
-    date: &NaiveDate,
+    date: NaiveDate,
     pages: I,
 ) -> Result<()>
 where
@@ -484,7 +491,7 @@ pub fn show(ctx: Context) -> Result<()> {
         show_page_with_browser(
             &ctx.directory,
             ctx.config.browser.as_ref().map(|s| s.as_ref()),
-            &date,
+            date,
             pages,
         )?;
     }
@@ -523,26 +530,20 @@ pub fn amend(ctx: Context) -> Result<()> {
         )
     })?;
 
+    // ページをパース
     let image_prefix = generate_image_prefix(&last_page.created_at);
+    let parsed_page = parse_page(text, &image_prefix).context("ページのパースに失敗しました")?;
 
-    let (title, text, images) =
-        parse_page(text, &image_prefix).context("ページのパースに失敗しました")?;
-
-    // タイトルが空だったらエラー
-    if title.is_empty() {
-        return Err(anyhow!("タイトルが空です"));
-    }
-
-    last_page.title = title;
-    last_page.text = text;
+    last_page.title = parsed_page.title;
+    last_page.text = parsed_page.text;
     last_page.updated_at.push(Utc::now());
 
     // 画像を書き込む
-    for (original_path, file_name) in &images {
+    for (original_path, file_name) in parsed_page.images {
         if original_path.exists() {
-            storage::write_image(&ctx.directory, original_path, file_name).with_context(|| {
-                format!("`{}` の書き込みに失敗しました", original_path.display())
-            })?;
+            storage::write_image(&ctx.directory, &original_path, &file_name).with_context(
+                || format!("`{}` の書き込みに失敗しました", original_path.display()),
+            )?;
         } else {
             eprintln!(
                 "`{}` が存在しなかったため無視しました",
@@ -605,11 +606,11 @@ pub fn search(ctx: Context) -> Result<()> {
                 show_page_with_browser(
                     &ctx.directory,
                     ctx.config.browser.as_ref().map(|s| s.as_ref()),
-                    &pages[0]
-                    .created_at
-                    .with_timezone(&Local)
-                    .date()
-                    .naive_local(),
+                    pages[0]
+                        .created_at
+                        .with_timezone(&Local)
+                        .date()
+                        .naive_local(),
                     iter::once(pages[0].clone()),
                 )?;
             }
@@ -658,7 +659,7 @@ pub fn sync(ctx: Context) -> Result<()> {
     match storage::sync(&ctx.directory, &client, &access_token) {
         Ok(_) => {
             // バックアップを削除
-             storage::remove_pages_backup(&ctx.directory, backup_id)
+            storage::remove_pages_backup(&ctx.directory, backup_id)
                 .context("バックアップの削除に失敗しました")?;
         }
         Err(err) => {
@@ -679,10 +680,7 @@ pub fn fixpage(ctx: Context) -> Result<()> {
             println!("変換は必要ありません");
         }
         (1, 2) => {
-            if let Err(err) = storage::fix_1_to_2(&ctx.directory) {
-                eprintln!("修正に失敗しました: {}", err);
-                return Err(err.into());
-            }
+            storage::fix_1_to_2(&ctx.directory).context("修正に失敗しました: {}")?;
         }
         _ => unreachable!(),
     };

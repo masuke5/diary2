@@ -48,9 +48,9 @@ pub const BACKUP_DIR_PREFIX: &str = "backup";
 pub const EDITED_ENTRIES_FILE: &str = "edited_entries.json";
 
 // 日曜日と土曜日の日付を取得
-fn find_week(day: &Date<Utc>) -> (Date<Utc>, Date<Utc>) {
-    let mut begin = day.clone();
-    let mut end = day.clone();
+fn find_week(day: Date<Utc>) -> (Date<Utc>, Date<Utc>) {
+    let mut begin = day;
+    let mut end = day;
     loop {
         match begin.weekday() {
             Weekday::Sun => break,
@@ -68,15 +68,15 @@ fn find_week(day: &Date<Utc>) -> (Date<Utc>, Date<Utc>) {
     (begin, end)
 }
 
-fn generate_page_filepath(directory: &Path, date: &Date<Utc>) -> PathBuf {
+fn generate_page_filepath(directory: &Path, date: Date<Utc>) -> PathBuf {
     let (week_begin, week_end) = find_week(date);
     let filename = format!(
         "{}-{}.json",
         week_begin.format("%Y-%m-%d"),
         week_end.format("%Y-%m-%d")
     );
-    let filepath = directory.join(PAGE_DIR).join(&filename);
-    filepath
+
+    directory.join(PAGE_DIR).join(&filename)
 }
 
 fn get_edited_entries(directory: &Path) -> Result<EditedEntries> {
@@ -107,7 +107,7 @@ where
 }
 
 pub fn write(directory: &Path, page: Page) -> Result<()> {
-    let filepath = generate_page_filepath(directory, &Utc::today());
+    let filepath = generate_page_filepath(directory, Utc::today());
 
     // なぜか追記される
     // let file = OpenOptions::new()
@@ -232,7 +232,7 @@ pub fn get_week_page_range(
     let mut last_file_path = None;
 
     while date <= end {
-        let file_path = generate_page_filepath(directory, &date);
+        let file_path = generate_page_filepath(directory, date);
         let file = File::open(&file_path)?;
         let wpage: WeekPage = serde_json::from_reader(&file)?;
         wpages.push(wpage);
@@ -242,7 +242,7 @@ pub fn get_week_page_range(
     }
 
     let last_file_path = last_file_path.unwrap();
-    let file_path = generate_page_filepath(directory, &end);
+    let file_path = generate_page_filepath(directory, end);
     if last_file_path != file_path {
         let file = File::open(&file_path)?;
         let wpage: WeekPage = serde_json::from_reader(&file)?;

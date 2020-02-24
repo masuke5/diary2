@@ -17,9 +17,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use clap::{App, Arg, SubCommand};
 use anyhow::Result;
-use toml;
+use clap::{App, Arg, SubCommand};
 
 use config::Config;
 
@@ -45,9 +44,9 @@ fn get_directory() -> PathBuf {
     } else {
         let config_dir = env::var("XDG_CONFIG_HOME")
             .map(|dir| Path::new(&dir).to_path_buf())
-            .unwrap_or(
-                Path::new(&env::var("HOME").expect("HOMEが設定されていません")).join(".config"),
-            );
+            .unwrap_or_else(|_| {
+                Path::new(&env::var("HOME").expect("HOMEが設定されていません")).join(".config")
+            });
         config_dir.join("diary2")
     }
 }
@@ -68,15 +67,19 @@ fn get_page_version(base: &Path) -> u32 {
 fn main() {
     let directory = get_directory();
 
-    fs::create_dir_all(&directory.join(storage::PAGE_DIR)).expect(&format!(
-        "\"{}\" の作成に失敗しました",
-        directory.join(storage::PAGE_DIR).to_string_lossy()
-    ));
+    fs::create_dir_all(&directory.join(storage::PAGE_DIR)).unwrap_or_else(|_| {
+        panic!(
+            "\"{}\" の作成に失敗しました",
+            directory.join(storage::PAGE_DIR).to_string_lossy()
+        )
+    });
 
-    fs::create_dir_all(&directory.join(storage::IMAGE_DIR)).expect(&format!(
-        "\"{}\" の作成に失敗しました",
-        directory.join(storage::PAGE_DIR).to_string_lossy()
-    ));
+    fs::create_dir_all(&directory.join(storage::IMAGE_DIR)).unwrap_or_else(|_| {
+        panic!(
+            "\"{}\" の作成に失敗しました",
+            directory.join(storage::PAGE_DIR).to_string_lossy()
+        )
+    });
 
     let page_version = get_page_version(&directory);
 
@@ -151,8 +154,7 @@ fn main() {
         }
     };
 
-    let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<()>> =
-        HashMap::new();
+    let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<()>> = HashMap::new();
     commands.insert("config", commands::config);
     commands.insert("list", commands::list);
     commands.insert("new", commands::new);
@@ -166,33 +168,33 @@ fn main() {
 
     for (name, func) in commands {
         if let Some(sub_matches) = matches.subcommand_matches(name) {
-            if name != "fixpage" {
-                if page_version != page::CURRENT_PAGE_VERSION {
-                    eprintln!("ページの保存形式が違います。");
-                    eprintln!("`diary2 fixpage` を実行してください。");
-                    process::exit(2);
-                }
+            if name != "fixpage" && page_version != page::CURRENT_PAGE_VERSION {
+                eprintln!("ページの保存形式が違います。");
+                eprintln!("`diary2 fixpage` を実行してください。");
+                process::exit(2);
             }
 
-            if let Err(err) = func(commands::Context::new(
+            let ctx = commands::Context::new(
                 &directory,
                 &config_file_path,
                 config,
                 &matches,
                 sub_matches,
                 page_version,
-            )) {
+            );
+
+            if let Err(err) = func(ctx) {
                 eprintln!("{}", err);
                 for cause in err.chain().skip(1) {
                     eprintln!("詳細: {}", cause);
                 }
 
                 std::process::exit(1);
-            } else {
-                if name == "fixpage" {
-                    let file_path = directory.join(PAGE_VERSION_FILE);
-                    fs::write(&file_path, &format!("{}", page::CURRENT_PAGE_VERSION)).unwrap();
-                }
+            }
+
+            if name == "fixpage" {
+                let file_path = directory.join(PAGE_VERSION_FILE);
+                fs::write(&file_path, &format!("{}", page::CURRENT_PAGE_VERSION)).unwrap();
             }
             break;
         }
