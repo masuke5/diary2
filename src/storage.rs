@@ -1,14 +1,15 @@
-use crate::page::{Page, WeekPage, WeekPageV1};
-use chrono::{Date, DateTime, Datelike, Duration, Utc, Weekday};
-use failure;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::{DirEntry, File};
 use std::mem;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
+use uuid::Uuid;
+use chrono::{Date, DateTime, Datelike, Duration, Utc, Weekday};
+use anyhow::Result;
+
+use crate::page::{Page, WeekPage, WeekPageV1};
 use crate::dropbox;
 use crate::dropbox::AccessToken;
 
@@ -78,7 +79,7 @@ fn generate_page_filepath(directory: &Path, date: &Date<Utc>) -> PathBuf {
     filepath
 }
 
-fn get_edited_entries(directory: &Path) -> Result<EditedEntries, failure::Error> {
+fn get_edited_entries(directory: &Path) -> Result<EditedEntries> {
     let file_path = directory.join(EDITED_ENTRIES_FILE);
 
     if file_path.exists() {
@@ -90,7 +91,7 @@ fn get_edited_entries(directory: &Path) -> Result<EditedEntries, failure::Error>
     }
 }
 
-fn update_edited_entries<F>(directory: &Path, edit: F) -> Result<(), failure::Error>
+fn update_edited_entries<F>(directory: &Path, edit: F) -> Result<()>
 where
     F: FnOnce(&mut EditedEntries),
 {
@@ -105,7 +106,7 @@ where
     Ok(())
 }
 
-pub fn write(directory: &Path, page: Page) -> Result<(), failure::Error> {
+pub fn write(directory: &Path, page: Page) -> Result<()> {
     let filepath = generate_page_filepath(directory, &Utc::today());
 
     // なぜか追記される
@@ -157,7 +158,7 @@ pub fn write_image(
     directory: &Path,
     image_path: &Path,
     file_name: &str,
-) -> Result<(), failure::Error> {
+) -> Result<()> {
     let dest = directory.join(IMAGE_DIR).join(file_name);
 
     update_edited_entries(directory, |entries| {
@@ -171,7 +172,7 @@ pub fn write_image(
     Ok(())
 }
 
-pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>, failure::Error> {
+pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>> {
     list_with_filter(directory, limit, |_| true)
 }
 
@@ -179,7 +180,7 @@ pub fn list_with_filter<F>(
     directory: &Path,
     limit: u32,
     filter: F,
-) -> Result<Vec<Page>, failure::Error>
+) -> Result<Vec<Page>>
 where
     F: Fn(&Page) -> bool,
 {
@@ -220,7 +221,7 @@ pub fn get_week_page_range(
     directory: &Path,
     start: &DateTime<Utc>,
     end: &DateTime<Utc>,
-) -> Result<Vec<WeekPage>, failure::Error> {
+) -> Result<Vec<WeekPage>> {
     if start > end {
         return Ok(Vec::new());
     }
@@ -269,7 +270,7 @@ fn get_file_map<'a, IR>(
     local_files_dir: &Path,
     edited_files: &HashSet<String>,
     files_on_remote: IR,
-) -> Result<HashMap<String, FileState>, failure::Error>
+) -> Result<HashMap<String, FileState>>
 where
     IR: Iterator<Item = &'a str>,
 {
@@ -319,7 +320,7 @@ pub fn sync(
     directory: &Path,
     client: &reqwest::Client,
     access_token: &AccessToken,
-) -> Result<(), failure::Error> {
+) -> Result<()> {
     dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX)?;
     dropbox::create_folder(client, access_token, IMAGE_DIR_ON_DROPBOX)?;
 
@@ -463,7 +464,7 @@ fn generate_backup_dir_path_not_exists(base: &Path, prefix: &str) -> (PathBuf, u
     }
 }
 
-pub fn create_pages_backup(directory: &Path) -> Result<u32, failure::Error> {
+pub fn create_pages_backup(directory: &Path) -> Result<u32> {
     let page_dir = directory.join(PAGE_DIR);
     let (backup_dir, id) = generate_backup_dir_path_not_exists(directory, BACKUP_DIR_PREFIX);
 
@@ -482,7 +483,7 @@ pub fn create_pages_backup(directory: &Path) -> Result<u32, failure::Error> {
     Ok(id)
 }
 
-pub fn rollback(directory: &Path, id: u32) -> Result<(), failure::Error> {
+pub fn rollback(directory: &Path, id: u32) -> Result<()> {
     let page_dir = directory.join(PAGE_DIR);
     let backup_dir = generate_backup_dir_path(directory, BACKUP_DIR_PREFIX, id);
 
@@ -505,7 +506,7 @@ pub fn rollback(directory: &Path, id: u32) -> Result<(), failure::Error> {
     Ok(())
 }
 
-pub fn remove_pages_backup(directory: &Path, id: u32) -> Result<(), failure::Error> {
+pub fn remove_pages_backup(directory: &Path, id: u32) -> Result<()> {
     let backup_dir = generate_backup_dir_path(directory, BACKUP_DIR_PREFIX, id);
     fs::remove_dir_all(backup_dir)?;
 
@@ -534,7 +535,7 @@ fn convert_week_page_v1_to_v2(wpage: WeekPageV1) -> WeekPage {
     }
 }
 
-pub fn fix_1_to_2(directory: &Path) -> Result<(), failure::Error> {
+pub fn fix_1_to_2(directory: &Path) -> Result<()> {
     // ページが格納されているディレクトリのファイルをすべて取得する
     let entries = directory
         .join(PAGE_DIR)

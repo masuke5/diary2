@@ -3,7 +3,7 @@ use std::io::{Read, BufRead, BufReader, Write};
 use std::net::TcpListener;
 
 use chrono::{DateTime, Utc};
-use failure;
+use anyhow::Result;
 use oauth2::reqwest::http_client;
 use oauth2::{
     basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl,
@@ -18,7 +18,7 @@ pub struct AccessToken {
     pub value: String,
 }
 
-pub fn get_access_token() -> Result<AccessToken, failure::Error> {
+pub fn get_access_token() -> Result<AccessToken> {
     let app_key = ClientId::new(secret::app_key().to_string());
     let app_secret = ClientSecret::new(secret::app_secret().to_string());
     let auth_url = AuthUrl::new("https://www.dropbox.com/oauth2/authorize".to_string()).unwrap();
@@ -82,7 +82,7 @@ pub fn get_access_token() -> Result<AccessToken, failure::Error> {
             );
             stream.write_all(response.as_bytes())?;
 
-            let token = client.exchange_code(code).request(http_client)?;
+            let token = client.exchange_code(code).request(http_client).unwrap();
             return Ok(AccessToken {
                 value: token.access_token().secret().clone(),
             });
@@ -102,7 +102,7 @@ pub fn download_file_to_string(
     client: &Client,
     access_token: &AccessToken,
     path: &str,
-) -> Result<(FileInfo, String), failure::Error> {
+) -> Result<(FileInfo, String)> {
     let (info, bytes) = download_file(client, access_token, path)?;
     Ok((info, String::from_utf8_lossy(&bytes).to_string()))
 }
@@ -111,7 +111,7 @@ pub fn download_file(
     client: &Client,
     access_token: &AccessToken,
     path: &str,
-) -> Result<(FileInfo, Vec<u8>), failure::Error> {
+) -> Result<(FileInfo, Vec<u8>)> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
     let json = serde_json::to_string(&parameters)?;
@@ -140,7 +140,7 @@ pub fn upload_file<B: Into<reqwest::Body>>(
     access_token: &AccessToken,
     path: &str,
     contents: B,
-) -> Result<FileInfo, failure::Error> {
+) -> Result<FileInfo> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
     parameters.insert("mode", "overwrite");
@@ -170,7 +170,7 @@ pub fn list_files(
     client: &Client,
     access_token: &AccessToken,
     path: &str,
-) -> Result<Vec<FileInfo>, failure::Error> {
+) -> Result<Vec<FileInfo>> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
 
@@ -191,7 +191,7 @@ pub fn create_folder(
     client: &Client,
     access_token: &AccessToken,
     path: &str,
-) -> Result<(), failure::Error> {
+) -> Result<()> {
     let mut parameters = HashMap::new();
     parameters.insert("path", path);
 

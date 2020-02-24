@@ -1,16 +1,15 @@
-use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
-use clap::ArgMatches;
-use colored::*;
-use failure;
-use reqwest::Client;
 use std::borrow::Cow;
 use std::fs;
-use std::io;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::{anyhow, Context as _, Result};
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
+use clap::ArgMatches;
+use colored::*;
 use comrak::{markdown_to_html, ComrakOptions};
+use reqwest::Client;
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -51,9 +50,9 @@ impl<'a> Context<'a> {
 fn parse_page(
     text: String,
     image_prefix: &str,
-) -> Result<(String, String, Vec<(PathBuf, String)>), String> {
+) -> Result<(String, String, Vec<(PathBuf, String)>)> {
     if text.trim().is_empty() {
-        return Err(String::from("キャンセルされました"));
+        return Err(anyhow!("キャンセルされました"));
     }
 
     let mut iter = text.chars();
@@ -62,7 +61,7 @@ fn parse_page(
     let title: String = iter.by_ref().take_while(|&ch| ch != '\n').collect();
     let title = title.trim();
     if title.is_empty() {
-        return Err(String::from("タイトルが空です"));
+        return Err(anyhow!("タイトルが空です"));
     }
 
     // 本文
@@ -116,7 +115,7 @@ fn execute_command(s: &str) -> Command {
     }
 }
 
-fn execute_editor(editor: &str, filepath: &Path) -> Result<bool, failure::Error> {
+fn execute_editor(editor: &str, filepath: &Path) -> Result<bool> {
     let mut command =
         execute_command(&format!("{} {}", editor, filepath.to_string_lossy())).spawn()?;
 
@@ -124,7 +123,7 @@ fn execute_editor(editor: &str, filepath: &Path) -> Result<bool, failure::Error>
     Ok(status.success())
 }
 
-fn open_file_with_associated(file: &Path, command: Option<&str>) -> Result<(), failure::Error> {
+fn open_file_with_associated(file: &Path, command: Option<&str>) -> Result<()> {
     let command = command.unwrap_or(DEFAULT_COMMAND_OPEN);
 
     Command::new(command)
@@ -134,7 +133,7 @@ fn open_file_with_associated(file: &Path, command: Option<&str>) -> Result<(), f
     Ok(())
 }
 
-pub fn config(ctx: Context) -> Result<(), failure::Error> {
+pub fn config(ctx: Context) -> Result<()> {
     let editor = ctx
         .subcommand_matches
         .value_of("editor")
@@ -172,32 +171,23 @@ fn print_page(page: &Page) {
     println!("{}\n", page.text);
 }
 
-pub fn list(ctx: Context) -> Result<(), failure::Error> {
+pub fn list(ctx: Context) -> Result<()> {
     let limit = match ctx.subcommand_matches.value_of("limit") {
-        Some(limit) => match limit.parse::<u32>() {
-            Ok(limit) => limit,
-            Err(err) => {
-                eprintln!("--limitの値が数値ではありません");
-                return Err(From::from(err));
-            }
-        },
+        Some(limit) => limit
+            .parse::<u32>()
+            .context("--limitの値が数値ではありません")?,
         None => ctx.config.default_list_limit,
     };
 
-    let pages = match storage::list_with_filter(&ctx.directory, limit, |page| !page.hidden) {
-        Ok(pages) => pages,
-        Err(err) => {
-            eprintln!("ページの取得に失敗しました: {}", err);
-            return Err(From::from(err));
-        }
-    };
+    let pages = storage::list_with_filter(&ctx.directory, limit, |page| !page.hidden)
+        .context("ページの取得に失敗しました")?;
 
     print_page_headers(pages.into_iter());
 
     Ok(())
 }
 
-pub fn new(ctx: Context) -> Result<(), failure::Error> {
+pub fn new(ctx: Context) -> Result<()> {
     let temp_file_path = ctx.directory.join(TEMP_FILE_TO_EDIT);
 
     // listコマンドで表示するかどうか
@@ -206,29 +196,21 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
     let created_at = Utc::now();
 
     // エディタを起動
-    if let Err(err) = execute_editor(&ctx.config.editor, &temp_file_path) {
-        eprintln!("エディタの起動に失敗しました: {}", err);
-        return Err(err);
-    }
+    execute_editor(&ctx.config.editor, &temp_file_path)
+        .context("エディタの起動に失敗しました: {}")?;
 
     // エディタで編集されたファイルを読み込む
-    let text = match fs::read_to_string(&temp_file_path) {
-        Ok(text) => text,
-        Err(err) => {
-            eprintln!("ファイルの読み込みに失敗しました: {}", err);
-            return Err(From::from(err));
-        }
-    };
+    let text = fs::read_to_string(&temp_file_path).with_context(|| {
+        format!(
+            "ファイル `{}` の読み込みに失敗しました",
+            temp_file_path.display()
+        )
+    })?;
 
     let image_prefix = generate_image_prefix(&created_at);
 
-    let (title, text, images) = match parse_page(text, &image_prefix) {
-        Ok(t) => t,
-        Err(msg) => {
-            eprintln!("{}", msg);
-            return Ok(());
-        }
-    };
+    let (title, text, images) =
+        parse_page(text, &image_prefix).context("ページのパースに失敗しました")?;
 
     let page = Page {
         id: Uuid::new_v4().to_string(),
@@ -239,50 +221,42 @@ pub fn new(ctx: Context) -> Result<(), failure::Error> {
         updated_at: vec![Utc::now()],
     };
 
-    // 書き込み
+    // 画像をコピー
     for (original_path, file_name) in &images {
         if !original_path.exists() {
-            eprintln!(
-                "画像ファイル `{}` が存在しません",
+            return Err(anyhow!(
+                "`{}` が存在しません",
                 original_path.to_string_lossy()
-            );
-            return Ok(());
+            ));
         } else {
-            if let Err(err) = storage::write_image(&ctx.directory, original_path, file_name) {
-                eprintln!("画像の書き込みに失敗しました: {}", err);
-                return Err(From::from(err));
-            }
+            storage::write_image(&ctx.directory, original_path, file_name).with_context(|| {
+                format!("`{}` の書き込みに失敗しました", original_path.display())
+            })?;
         }
     }
 
-    if let Err(err) = storage::write(&ctx.directory, page) {
-        eprintln!("ページの書き込みに失敗しました: {}", err);
-        return Err(From::from(err));
-    }
+    // ページを書き込む
+    storage::write(&ctx.directory, page).context("ページの書き込みに失敗しました")?;
 
-    // ファイルを削除
-    if let Err(err) = fs::remove_file(&temp_file_path) {
-        eprintln!("ファイルの削除に失敗しました: {}", err);
-        return Err(From::from(err));
-    }
+    // 一時ファイルを削除
+    // 書き込みに失敗したときはここまで到達できないので削除されない
+    fs::remove_file(&temp_file_path).with_context(|| {
+        format!(
+            "ファイル `{}` の削除に失敗しました",
+            temp_file_path.display()
+        )
+    })?;
 
     Ok(())
 }
 
-pub fn lastdt(ctx: Context) -> Result<(), failure::Error> {
+pub fn lastdt(ctx: Context) -> Result<()> {
     // 最新のページを取得
-    let last_page: Page = match storage::list(&ctx.directory, 1) {
-        Ok(pages) => match pages.into_iter().next() {
-            Some(page) => page,
-            None => {
-                eprintln!("ページがありません");
-                return Ok(());
-            }
-        },
-        Err(err) => {
-            eprintln!("ページの取得に失敗しました: {}", err);
-            return Err(From::from(err));
-        }
+    let pages = storage::list(&ctx.directory, 1).context("ページの取得に失敗しました")?;
+
+    let last_page = match pages.into_iter().next() {
+        Some(page) => page,
+        None => return Err(anyhow!("ページがありません")),
     };
 
     println!("{}", last_page.created_at.to_rfc3339());
@@ -432,28 +406,40 @@ where
     html
 }
 
-fn show_with_browser(directory: &Path, command: Option<&str>, s: &str) -> Result<(), failure::Error> {
+fn show_with_browser(directory: &Path, command: Option<&str>, s: &str) -> Result<()> {
     let file_path = directory.join(FILE_FOR_SHOWING);
-    fs::write(&file_path, s)?;
+    fs::write(&file_path, s)
+        .with_context(|| format!("`{}` へのHTMLの書き込みに失敗しました", file_path.display()))?;
 
-    open_file_with_associated(&file_path, command)?;
+    open_file_with_associated(&file_path, command)
+        .with_context(|| format!("`{}` をブラウザで開けませんでした", file_path.display()))?;
 
     Ok(())
 }
 
-pub fn show(ctx: Context) -> Result<(), failure::Error> {
+fn show_page_with_browser<I>(
+    directory: &Path,
+    command: Option<&str>,
+    date: &NaiveDate,
+    pages: I,
+) -> Result<()>
+where
+    I: Iterator<Item = Page>,
+{
+    let html = pages_to_html(directory, date, pages);
+    show_with_browser(directory, command, &html)?;
+
+    Ok(())
+}
+
+pub fn show(ctx: Context) -> Result<()> {
     let date_str = ctx.subcommand_matches.value_of("date");
     let date = match date_str {
-        Some(s) => match parse_date_str(s) {
-            Some(date) => date,
-            None => {
-                eprintln!("日付を解析できませんでした");
-                return Ok(());
-            }
-        },
+        Some(s) => parse_date_str(s).context("日付を解析できませんでした")?,
         None => Local::today().naive_local(),
     };
 
+    // 日付をUTCに変換
     let datetime = date.and_hms(0, 0, 0);
     let datetime = Local
         .from_local_datetime(&datetime)
@@ -465,7 +451,8 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
         &ctx.directory,
         &datetime,
         &(datetime + chrono::Duration::days(1)),
-    )?;
+    )
+    .context("ページの取得に失敗しました")?;
 
     let mut pages: Box<dyn Iterator<Item = Page>> = Box::new(iter::empty());
 
@@ -494,115 +481,103 @@ pub fn show(ctx: Context) -> Result<(), failure::Error> {
             }
         }
     } else {
-        let html = pages_to_html(&ctx.directory, &date, pages);
-        show_with_browser(&ctx.directory, ctx.config.browser.as_ref().map(|s| s.as_ref()), &html)?;
+        show_page_with_browser(
+            &ctx.directory,
+            ctx.config.browser.as_ref().map(|s| s.as_ref()),
+            &date,
+            pages,
+        )?;
     }
 
     Ok(())
 }
 
-pub fn amend(ctx: Context) -> Result<(), failure::Error> {
+pub fn amend(ctx: Context) -> Result<()> {
     // 最新のページを取得
-    let mut last_page: Page = match storage::list(&ctx.directory, 1) {
-        Ok(pages) => match pages.into_iter().next() {
-            Some(page) => page,
-            None => {
-                eprintln!("ページがありません");
-                return Ok(());
-            }
-        },
-        Err(err) => {
-            eprintln!("ページの取得に失敗しました: {}", err);
-            return Err(From::from(err));
-        }
+    let pages = storage::list(&ctx.directory, 1).context("ページの取得に失敗しました")?;
+
+    let mut last_page = match pages.into_iter().next() {
+        Some(page) => page,
+        None => return Err(anyhow!("ページがありません")),
     };
 
-    // 一時ファイルへ書き込み
+    // 一時ファイルへ書き込む
     let amend_file_path = ctx.directory.join(AMEND_FILE);
     let content = format!("{}\n\n{}", last_page.title, last_page.text);
-    if let Err(err) = fs::write(&amend_file_path, &content) {
-        eprintln!("一時ファイルへの書き込みに失敗しました: {}", err);
-        return Err(From::from(err));
-    }
+    fs::write(&amend_file_path, &content).with_context(|| {
+        format!(
+            "一時ファイル `{}` への書き込みに失敗しました",
+            amend_file_path.display()
+        )
+    })?;
 
     // エディタを開く
-    if let Err(err) = execute_editor(&ctx.config.editor, &amend_file_path) {
-        eprintln!("エディタの起動に失敗しました: {}", err);
-        return Err(err);
-    }
+    execute_editor(&ctx.config.editor, &amend_file_path)
+        .context("エディタの起動に失敗しました: {}")?;
 
     // エディタで編集されたファイルを読み込む
-    let text = match fs::read_to_string(&amend_file_path) {
-        Ok(text) => text,
-        Err(err) => {
-            eprintln!("ファイルの読み込みに失敗しました: {}", err);
-            return Err(From::from(err));
-        }
-    };
+    let text = fs::read_to_string(&amend_file_path).with_context(|| {
+        format!(
+            "一時ファイル `{}` の読み込みに失敗しました",
+            amend_file_path.display()
+        )
+    })?;
 
     let image_prefix = generate_image_prefix(&last_page.created_at);
 
-    let (title, text, images) = match parse_page(text, &image_prefix) {
-        Ok(t) => t,
-        Err(msg) => {
-            eprintln!("{}", msg);
-            return Ok(());
-        }
-    };
+    let (title, text, images) =
+        parse_page(text, &image_prefix).context("ページのパースに失敗しました")?;
 
     // タイトルが空だったらエラー
     if title.is_empty() {
-        eprintln!("タイトルが空です");
-        return Ok(());
+        return Err(anyhow!("タイトルが空です"));
     }
 
     last_page.title = title;
     last_page.text = text;
     last_page.updated_at.push(Utc::now());
 
-    // 書き込み
+    // 画像を書き込む
     for (original_path, file_name) in &images {
         if original_path.exists() {
-            if let Err(err) = storage::write_image(&ctx.directory, original_path, file_name) {
-                eprintln!("画像の書き込みに失敗しました: {}", err);
-                return Err(From::from(err));
-            }
+            storage::write_image(&ctx.directory, original_path, file_name).with_context(|| {
+                format!("`{}` の書き込みに失敗しました", original_path.display())
+            })?;
         } else {
             eprintln!(
-                "画像ファイル `{}` が存在しなかったため無視しました",
+                "`{}` が存在しなかったため無視しました",
                 original_path.to_string_lossy()
             );
         }
     }
 
-    if let Err(err) = storage::write(&ctx.directory, last_page) {
-        eprintln!("ページの書き込みに失敗しました: {}", err);
-        return Err(From::from(err));
-    }
+    // ページを書き込む
+    storage::write(&ctx.directory, last_page).context("ページの書き込みに失敗しました")?;
 
     Ok(())
 }
 
-pub fn search(ctx: Context) -> Result<(), failure::Error> {
+pub fn search(ctx: Context) -> Result<()> {
     let query = ctx.subcommand_matches.value_of("query").unwrap();
     let should_search_by_title_only = ctx.subcommand_matches.is_present("title");
     let should_search_by_text_only = ctx.subcommand_matches.is_present("text");
     let should_show_first_page = ctx.subcommand_matches.is_present("show-first");
+    let show_stdout = ctx.subcommand_matches.is_present("stdout");
+
+    // --show-firstが指定されている場合は1つだけ検索すればよい
     let limit = if should_show_first_page {
         1
     } else {
+        // limitが指定されていない場合は設定のdefault_list_limitを使う
         match ctx.subcommand_matches.value_of("limit") {
-            Some(limit) => match limit.parse::<u32>() {
-                Ok(limit) => limit,
-                Err(err) => {
-                    eprintln!("--limitの値が数値ではありません");
-                    return Err(From::from(err));
-                }
-            },
+            Some(limit) => limit
+                .parse::<u32>()
+                .context("--limitの値が数値ではありません")?,
             None => ctx.config.default_list_limit,
         }
     };
 
+    // オプションを元にクロージャを生成
     let filter = |page: &Page| -> bool {
         if page.hidden {
             return false;
@@ -617,17 +592,27 @@ pub fn search(ctx: Context) -> Result<(), failure::Error> {
         }
     };
 
-    let pages = match storage::list_with_filter(&ctx.directory, limit, filter) {
-        Ok(pages) => pages,
-        Err(err) => {
-            eprintln!("ページの取得に失敗しました: {}", err);
-            return Err(From::from(err));
-        }
-    };
+    // 検索
+    let pages = storage::list_with_filter(&ctx.directory, limit, filter)
+        .context("ページの取得に失敗しました")?;
 
     if should_show_first_page {
-        if pages.len() > 0 {
-            print_page(&pages[0]);
+        if !pages.is_empty() {
+            if show_stdout {
+                print_page(&pages[0]);
+            } else {
+                // 表示
+                show_page_with_browser(
+                    &ctx.directory,
+                    ctx.config.browser.as_ref().map(|s| s.as_ref()),
+                    &pages[0]
+                    .created_at
+                    .with_timezone(&Local)
+                    .date()
+                    .naive_local(),
+                    iter::once(pages[0].clone()),
+                )?;
+            }
         } else {
             eprintln!("ページが見つかりませんでした");
         }
@@ -638,50 +623,33 @@ pub fn search(ctx: Context) -> Result<(), failure::Error> {
     Ok(())
 }
 
-pub fn auth(ctx: Context) -> Result<(), failure::Error> {
-    let access_token = match dropbox::get_access_token() {
-        Ok(access_token) => access_token,
-        Err(err) => {
-            eprintln!("アクセストークンの取得に失敗しました: {}", err);
-            return Err(err.into());
-        }
-    };
+pub fn auth(ctx: Context) -> Result<()> {
+    let access_token =
+        dropbox::get_access_token().context("アクセストークンの取得に失敗しました")?;
 
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
-    if let Err(err) = fs::write(path, &access_token.value) {
-        eprintln!("アクセストークンの保存に失敗しました: {}", err);
-        return Err(err.into());
-    }
+    fs::write(path, &access_token.value).context("アクセストークンの保存に失敗しました")?;
 
     println!("認証に成功しました");
 
     Ok(())
 }
 
-pub fn sync(ctx: Context) -> Result<(), failure::Error> {
+pub fn sync(ctx: Context) -> Result<()> {
     // バックアップを取っておく
-    let backup_id = match storage::create_pages_backup(&ctx.directory) {
-        Ok(backup_id) => backup_id,
-        Err(err) => {
-            eprintln!("バックアップの作成に失敗しました: {}", err);
-            return Err(err.into());
-        }
-    };
+    let backup_id =
+        storage::create_pages_backup(&ctx.directory).context("バックアップの作成に失敗しました")?;
 
     // アクセストークンを取得
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
-    let access_token = match fs::read_to_string(path) {
-        Ok(access_token) => access_token,
-        Err(err) => {
-            if err.kind() == io::ErrorKind::NotFound {
-                eprintln!("認証していません");
-            } else {
-                eprintln!("アクセストークンの取得に失敗しました: {}", err);
-            }
+    if !path.exists() {
+        println!("認証していません。");
+        println!("`diary2 auth` を実行して認証してください。");
+    }
 
-            return Err(err.into());
-        }
-    };
+    let access_token =
+        fs::read_to_string(path).context("アクセストークンの取得に失敗しました: {}")?;
+
     let access_token = AccessToken {
         value: access_token,
     };
@@ -690,28 +658,22 @@ pub fn sync(ctx: Context) -> Result<(), failure::Error> {
     match storage::sync(&ctx.directory, &client, &access_token) {
         Ok(_) => {
             // バックアップを削除
-            if let Err(err) = storage::remove_pages_backup(&ctx.directory, backup_id) {
-                eprintln!("バックアップの削除に失敗しました: {}", err);
-                return Err(err.into());
-            }
+             storage::remove_pages_backup(&ctx.directory, backup_id)
+                .context("バックアップの削除に失敗しました")?;
         }
         Err(err) => {
-            eprintln!("同期に失敗しました: {}", err);
-
             // バックアップを復元する
-            if let Err(err) = storage::rollback(&ctx.directory, backup_id) {
-                eprintln!("バックアップの復元に失敗しました: {}", err);
-                return Err(err.into());
-            }
+            storage::rollback(&ctx.directory, backup_id)
+                .context("バックアップの復元に失敗しました")?;
 
-            return Err(err.into());
+            return Err(err).context("同期に失敗しました");
         }
     };
 
     Ok(())
 }
 
-pub fn fixpage(ctx: Context) -> Result<(), failure::Error> {
+pub fn fixpage(ctx: Context) -> Result<()> {
     match (ctx.page_version, CURRENT_PAGE_VERSION) {
         (a, b) if a == b => {
             println!("変換は必要ありません");

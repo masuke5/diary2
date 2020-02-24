@@ -8,8 +8,6 @@ mod page;
 mod secret;
 mod storage;
 
-use clap::{App, Arg, SubCommand};
-use config::Config;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -18,12 +16,17 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
+
+use clap::{App, Arg, SubCommand};
+use anyhow::Result;
 use toml;
+
+use config::Config;
 
 const CONFIG_FILE: &str = "config.toml";
 const PAGE_VERSION_FILE: &str = "page_version";
 
-fn load_config(config_file_path: &Path) -> Result<Config, failure::Error> {
+fn load_config(config_file_path: &Path) -> Result<Config> {
     if !config_file_path.exists() {
         return Ok(Config::default());
     }
@@ -110,6 +113,7 @@ fn main() {
                 .arg(Arg::with_name("title").long("title").short("t"))
                 .arg(Arg::with_name("text").long("text").short("b"))
                 .arg(Arg::with_name("show-first").long("show-first").short("f"))
+                .arg(Arg::with_name("stdout").long("stdout").short("s"))
                 .arg(
                     Arg::with_name("limit")
                         .takes_value(true)
@@ -147,7 +151,7 @@ fn main() {
         }
     };
 
-    let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<(), failure::Error>> =
+    let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<()>> =
         HashMap::new();
     commands.insert("config", commands::config);
     commands.insert("list", commands::list);
@@ -170,7 +174,7 @@ fn main() {
                 }
             }
 
-            if let Err(_) = func(commands::Context::new(
+            if let Err(err) = func(commands::Context::new(
                 &directory,
                 &config_file_path,
                 config,
@@ -178,6 +182,11 @@ fn main() {
                 sub_matches,
                 page_version,
             )) {
+                eprintln!("{}", err);
+                for cause in err.chain().skip(1) {
+                    eprintln!("詳細: {}", cause);
+                }
+
                 std::process::exit(1);
             } else {
                 if name == "fixpage" {
