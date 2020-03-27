@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::fs;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,6 +9,7 @@ use clap::ArgMatches;
 use colored::*;
 use comrak::{markdown_to_html, ComrakOptions};
 use reqwest::Client;
+use tokio::fs;
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -179,7 +179,7 @@ fn print_page(page: &Page) {
     println!("{}\n", page.text);
 }
 
-pub fn list(ctx: Context) -> Result<()> {
+pub async fn list(ctx: Context<'_>) -> Result<()> {
     let limit = match ctx.subcommand_matches.value_of("limit") {
         Some(limit) => limit
             .parse::<u32>()
@@ -188,6 +188,7 @@ pub fn list(ctx: Context) -> Result<()> {
     };
 
     let pages = storage::list_with_filter(&ctx.directory, limit, |page| !page.hidden)
+        .await
         .context("ページの取得に失敗しました")?;
 
     print_page_headers(pages.into_iter());
@@ -195,7 +196,7 @@ pub fn list(ctx: Context) -> Result<()> {
     Ok(())
 }
 
-pub fn new(ctx: Context) -> Result<()> {
+pub async fn new(ctx: Context<'_>) -> Result<()> {
     let temp_file_path = ctx.directory.join(TEMP_FILE_TO_EDIT);
 
     // listコマンドで表示するかどうか
@@ -208,7 +209,7 @@ pub fn new(ctx: Context) -> Result<()> {
         .context("エディタの起動に失敗しました: {}")?;
 
     // エディタで編集されたファイルを読み込む
-    let text = fs::read_to_string(&temp_file_path).with_context(|| {
+    let text = fs::read_to_string(&temp_file_path).await.with_context(|| {
         format!(
             "ファイル `{}` の読み込みに失敗しました",
             temp_file_path.display()
@@ -236,18 +237,22 @@ pub fn new(ctx: Context) -> Result<()> {
                 original_path.to_string_lossy()
             ));
         } else {
-            storage::write_image(&ctx.directory, &original_path, &file_name).with_context(
-                || format!("`{}` の書き込みに失敗しました", original_path.display()),
-            )?;
+            storage::write_image(&ctx.directory, &original_path, &file_name)
+                .await
+                .with_context(|| {
+                    format!("`{}` の書き込みに失敗しました", original_path.display())
+                })?;
         }
     }
 
     // ページを書き込む
-    storage::write(&ctx.directory, page).context("ページの書き込みに失敗しました")?;
+    storage::write(&ctx.directory, page)
+        .await
+        .context("ページの書き込みに失敗しました")?;
 
     // 一時ファイルを削除
     // 書き込みに失敗したときはここまで到達できないので削除されない
-    fs::remove_file(&temp_file_path).with_context(|| {
+    fs::remove_file(&temp_file_path).await.with_context(|| {
         format!(
             "ファイル `{}` の削除に失敗しました",
             temp_file_path.display()
@@ -257,9 +262,11 @@ pub fn new(ctx: Context) -> Result<()> {
     Ok(())
 }
 
-pub fn lastdt(ctx: Context) -> Result<()> {
+pub async fn lastdt(ctx: Context<'_>) -> Result<()> {
     // 最新のページを取得
-    let pages = storage::list(&ctx.directory, 1).context("ページの取得に失敗しました")?;
+    let pages = storage::list(&ctx.directory, 1)
+        .await
+        .context("ページの取得に失敗しました")?;
 
     let last_page = match pages.into_iter().next() {
         Some(page) => page,
@@ -413,9 +420,10 @@ where
     html
 }
 
-fn show_with_browser(directory: &Path, command: Option<&str>, s: &str) -> Result<()> {
+async fn show_with_browser(directory: &Path, command: Option<&str>, s: &str) -> Result<()> {
     let file_path = directory.join(FILE_FOR_SHOWING);
     fs::write(&file_path, s)
+        .await
         .with_context(|| format!("`{}` へのHTMLの書き込みに失敗しました", file_path.display()))?;
 
     open_file_with_associated(&file_path, command)
@@ -424,7 +432,7 @@ fn show_with_browser(directory: &Path, command: Option<&str>, s: &str) -> Result
     Ok(())
 }
 
-fn show_page_with_browser<I>(
+async fn show_page_with_browser<I>(
     directory: &Path,
     command: Option<&str>,
     date: NaiveDate,
@@ -434,12 +442,12 @@ where
     I: Iterator<Item = Page>,
 {
     let html = pages_to_html(directory, date, pages);
-    show_with_browser(directory, command, &html)?;
+    show_with_browser(directory, command, &html).await?;
 
     Ok(())
 }
 
-pub fn show(ctx: Context) -> Result<()> {
+pub async fn show(ctx: Context<'_>) -> Result<()> {
     let date_str = ctx.subcommand_matches.value_of("date");
     let date = match date_str {
         Some(s) => parse_date_str(s).context("日付を解析できませんでした")?,
@@ -459,6 +467,7 @@ pub fn show(ctx: Context) -> Result<()> {
         &datetime,
         &(datetime + chrono::Duration::days(1)),
     )
+    .await
     .context("ページの取得に失敗しました")?;
 
     let mut pages: Box<dyn Iterator<Item = Page>> = Box::new(iter::empty());
@@ -493,15 +502,18 @@ pub fn show(ctx: Context) -> Result<()> {
             ctx.config.browser.as_ref().map(|s| s.as_ref()),
             date,
             pages,
-        )?;
+        )
+        .await?;
     }
 
     Ok(())
 }
 
-pub fn amend(ctx: Context) -> Result<()> {
+pub async fn amend(ctx: Context<'_>) -> Result<()> {
     // 最新のページを取得
-    let pages = storage::list(&ctx.directory, 1).context("ページの取得に失敗しました")?;
+    let pages = storage::list(&ctx.directory, 1)
+        .await
+        .context("ページの取得に失敗しました")?;
 
     let mut last_page = match pages.into_iter().next() {
         Some(page) => page,
@@ -511,24 +523,28 @@ pub fn amend(ctx: Context) -> Result<()> {
     // 一時ファイルへ書き込む
     let amend_file_path = ctx.directory.join(AMEND_FILE);
     let content = format!("{}\n\n{}", last_page.title, last_page.text);
-    fs::write(&amend_file_path, &content).with_context(|| {
-        format!(
-            "一時ファイル `{}` への書き込みに失敗しました",
-            amend_file_path.display()
-        )
-    })?;
+    fs::write(&amend_file_path, &content)
+        .await
+        .with_context(|| {
+            format!(
+                "一時ファイル `{}` への書き込みに失敗しました",
+                amend_file_path.display()
+            )
+        })?;
 
     // エディタを開く
     execute_editor(&ctx.config.editor, &amend_file_path)
         .context("エディタの起動に失敗しました: {}")?;
 
     // エディタで編集されたファイルを読み込む
-    let text = fs::read_to_string(&amend_file_path).with_context(|| {
-        format!(
-            "一時ファイル `{}` の読み込みに失敗しました",
-            amend_file_path.display()
-        )
-    })?;
+    let text = fs::read_to_string(&amend_file_path)
+        .await
+        .with_context(|| {
+            format!(
+                "一時ファイル `{}` の読み込みに失敗しました",
+                amend_file_path.display()
+            )
+        })?;
 
     // ページをパース
     let image_prefix = generate_image_prefix(&last_page.created_at);
@@ -541,9 +557,11 @@ pub fn amend(ctx: Context) -> Result<()> {
     // 画像を書き込む
     for (original_path, file_name) in parsed_page.images {
         if original_path.exists() {
-            storage::write_image(&ctx.directory, &original_path, &file_name).with_context(
-                || format!("`{}` の書き込みに失敗しました", original_path.display()),
-            )?;
+            storage::write_image(&ctx.directory, &original_path, &file_name)
+                .await
+                .with_context(|| {
+                    format!("`{}` の書き込みに失敗しました", original_path.display())
+                })?;
         } else {
             eprintln!(
                 "`{}` が存在しなかったため無視しました",
@@ -553,12 +571,14 @@ pub fn amend(ctx: Context) -> Result<()> {
     }
 
     // ページを書き込む
-    storage::write(&ctx.directory, last_page).context("ページの書き込みに失敗しました")?;
+    storage::write(&ctx.directory, last_page)
+        .await
+        .context("ページの書き込みに失敗しました")?;
 
     Ok(())
 }
 
-pub fn search(ctx: Context) -> Result<()> {
+pub async fn search(ctx: Context<'_>) -> Result<()> {
     let query = ctx.subcommand_matches.value_of("query").unwrap();
     let should_search_by_title_only = ctx.subcommand_matches.is_present("title");
     let should_search_by_text_only = ctx.subcommand_matches.is_present("text");
@@ -595,6 +615,7 @@ pub fn search(ctx: Context) -> Result<()> {
 
     // 検索
     let pages = storage::list_with_filter(&ctx.directory, limit, filter)
+        .await
         .context("ページの取得に失敗しました")?;
 
     if should_show_first_page {
@@ -612,7 +633,8 @@ pub fn search(ctx: Context) -> Result<()> {
                         .date()
                         .naive_local(),
                     iter::once(pages[0].clone()),
-                )?;
+                )
+                .await?;
             }
         } else {
             eprintln!("ページが見つかりませんでした");
@@ -624,22 +646,25 @@ pub fn search(ctx: Context) -> Result<()> {
     Ok(())
 }
 
-pub fn auth(ctx: Context) -> Result<()> {
+pub async fn auth(ctx: Context<'_>) -> Result<()> {
     let access_token =
         dropbox::get_access_token().context("アクセストークンの取得に失敗しました")?;
 
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
-    fs::write(path, &access_token.value).context("アクセストークンの保存に失敗しました")?;
+    fs::write(path, &access_token.value)
+        .await
+        .context("アクセストークンの保存に失敗しました")?;
 
     println!("認証に成功しました");
 
     Ok(())
 }
 
-pub fn sync(ctx: Context) -> Result<()> {
+pub async fn sync(ctx: Context<'_>) -> Result<()> {
     // バックアップを取っておく
-    let backup_id =
-        storage::create_pages_backup(&ctx.directory).context("バックアップの作成に失敗しました")?;
+    let backup_id = storage::create_pages_backup(&ctx.directory)
+        .await
+        .context("バックアップの作成に失敗しました")?;
 
     // アクセストークンを取得
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
@@ -648,23 +673,26 @@ pub fn sync(ctx: Context) -> Result<()> {
         println!("`diary2 auth` を実行して認証してください。");
     }
 
-    let access_token =
-        fs::read_to_string(path).context("アクセストークンの取得に失敗しました: {}")?;
+    let access_token = fs::read_to_string(path)
+        .await
+        .context("アクセストークンの取得に失敗しました: {}")?;
 
     let access_token = AccessToken {
         value: access_token,
     };
 
     let client = Client::new();
-    match storage::sync(&ctx.directory, &client, &access_token) {
+    match storage::sync(&ctx.directory, &client, &access_token).await {
         Ok(_) => {
             // バックアップを削除
             storage::remove_pages_backup(&ctx.directory, backup_id)
+                .await
                 .context("バックアップの削除に失敗しました")?;
         }
         Err(err) => {
             // バックアップを復元する
             storage::rollback(&ctx.directory, backup_id)
+                .await
                 .context("バックアップの復元に失敗しました")?;
 
             return Err(err).context("同期に失敗しました");
@@ -674,13 +702,15 @@ pub fn sync(ctx: Context) -> Result<()> {
     Ok(())
 }
 
-pub fn fixpage(ctx: Context) -> Result<()> {
+pub async fn fixpage(ctx: Context<'_>) -> Result<()> {
     match (ctx.page_version, CURRENT_PAGE_VERSION) {
         (a, b) if a == b => {
             println!("変換は必要ありません");
         }
         (1, 2) => {
-            storage::fix_1_to_2(&ctx.directory).context("修正に失敗しました: {}")?;
+            storage::fix_1_to_2(&ctx.directory)
+                .await
+                .context("修正に失敗しました: {}")?;
         }
         _ => unreachable!(),
     };

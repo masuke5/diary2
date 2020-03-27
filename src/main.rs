@@ -8,33 +8,28 @@ mod page;
 mod secret;
 mod storage;
 
-use std::collections::HashMap;
 use std::env;
-use std::fs;
-use std::fs::File;
-use std::io;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{App, Arg, SubCommand};
+use tokio::fs;
+use tokio::io;
 
 use config::Config;
 
 const CONFIG_FILE: &str = "config.toml";
 const PAGE_VERSION_FILE: &str = "page_version";
 
-fn load_config(config_file_path: &Path) -> Result<Config> {
+async fn load_config(config_file_path: &Path) -> Result<Config> {
     if !config_file_path.exists() {
         return Ok(Config::default());
     }
 
-    let mut config_file = File::open(config_file_path)?;
-    let mut toml_str = String::new();
-    config_file.read_to_string(&mut toml_str)?;
-
+    let toml_str = fs::read_to_string(config_file_path).await?;
     let config: Config = toml::from_str(&toml_str)?;
+
     Ok(config)
 }
 
@@ -51,37 +46,46 @@ fn get_directory() -> PathBuf {
     }
 }
 
-fn get_page_version(base: &Path) -> u32 {
+async fn get_page_version(base: &Path) -> u32 {
     let file_path = base.join(PAGE_VERSION_FILE);
 
     if file_path.exists() {
-        let version = fs::read_to_string(file_path).expect("バージョンの読み込みに失敗しました");
+        let version = fs::read_to_string(file_path)
+            .await
+            .expect("バージョンの読み込みに失敗しました");
         version.parse().expect("バージョンが数字ではありません")
     } else {
         fs::write(file_path, &format!("{}", page::CURRENT_PAGE_VERSION))
+            .await
             .expect("バージョンの書き込みに失敗しました");
         page::CURRENT_PAGE_VERSION
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<()> {
     let directory = get_directory();
 
-    fs::create_dir_all(&directory.join(storage::PAGE_DIR)).unwrap_or_else(|_| {
-        panic!(
-            "\"{}\" の作成に失敗しました",
-            directory.join(storage::PAGE_DIR).to_string_lossy()
-        )
-    });
+    // 必要なディレクトリを作成する
+    fs::create_dir_all(&directory.join(storage::PAGE_DIR))
+        .await
+        .with_context(|| {
+            format!(
+                "\"{}\" の作成に失敗しました",
+                directory.join(storage::PAGE_DIR).display(),
+            )
+        })?;
 
-    fs::create_dir_all(&directory.join(storage::IMAGE_DIR)).unwrap_or_else(|_| {
-        panic!(
-            "\"{}\" の作成に失敗しました",
-            directory.join(storage::PAGE_DIR).to_string_lossy()
-        )
-    });
+    fs::create_dir_all(&directory.join(storage::IMAGE_DIR))
+        .await
+        .with_context(|| {
+            format!(
+                "\"{}\" の作成に失敗しました",
+                directory.join(storage::PAGE_DIR).to_string_lossy()
+            )
+        })?;
 
-    let page_version = get_page_version(&directory);
+    let page_version = get_page_version(&directory).await;
 
     let matches = App::new("diary2")
         .version("1.2.0")
@@ -132,7 +136,7 @@ fn main() {
 
     // 設定ファイルを読み込む
     let config_file_path = directory.join(CONFIG_FILE);
-    let config = match load_config(&config_file_path) {
+    let config = match load_config(&config_file_path).await {
         Ok(config) => config,
         Err(err) => {
             if matches.subcommand_matches("config").is_some() {
@@ -154,49 +158,53 @@ fn main() {
         }
     };
 
-    let mut commands: HashMap<&str, fn(ctx: commands::Context) -> Result<()>> = HashMap::new();
-    commands.insert("config", commands::config);
-    commands.insert("list", commands::list);
-    commands.insert("new", commands::new);
-    commands.insert("lastdt", commands::lastdt);
-    commands.insert("show", commands::show);
-    commands.insert("amend", commands::amend);
-    commands.insert("search", commands::search);
-    commands.insert("auth", commands::auth);
-    commands.insert("sync", commands::sync);
-    commands.insert("fixpage", commands::fixpage);
+    let (name, sub_matches) = matches.subcommand();
+    let sub_matches = sub_matches.unwrap();
 
-    for (name, func) in commands {
-        if let Some(sub_matches) = matches.subcommand_matches(name) {
-            if name != "fixpage" && page_version != page::CURRENT_PAGE_VERSION {
-                eprintln!("ページの保存形式が違います。");
-                eprintln!("`diary2 fixpage` を実行してください。");
-                process::exit(2);
-            }
-
-            let ctx = commands::Context::new(
-                &directory,
-                &config_file_path,
-                config,
-                &matches,
-                sub_matches,
-                page_version,
-            );
-
-            if let Err(err) = func(ctx) {
-                eprintln!("{}", err);
-                for cause in err.chain().skip(1) {
-                    eprintln!("詳細: {}", cause);
-                }
-
-                std::process::exit(1);
-            }
-
-            if name == "fixpage" {
-                let file_path = directory.join(PAGE_VERSION_FILE);
-                fs::write(&file_path, &format!("{}", page::CURRENT_PAGE_VERSION)).unwrap();
-            }
-            break;
-        }
+    if name != "fixpage" && page_version != page::CURRENT_PAGE_VERSION {
+        eprintln!("ページの保存形式が違います。");
+        eprintln!("`diary2 fixpage` を実行してください。");
+        process::exit(2);
     }
+
+    let ctx = commands::Context::new(
+        &directory,
+        &config_file_path,
+        config,
+        &matches,
+        sub_matches,
+        page_version,
+    );
+
+    let result = match name {
+        "config" => commands::config(ctx),
+        "list" => commands::list(ctx).await,
+        "new" => commands::new(ctx).await,
+        "lastdt" => commands::lastdt(ctx).await,
+        "show" => commands::show(ctx).await,
+        "amend" => commands::amend(ctx).await,
+        "search" => commands::search(ctx).await,
+        "auth" => commands::auth(ctx).await,
+        "sync" => commands::sync(ctx).await,
+        "fixpage" => commands::fixpage(ctx).await,
+        _ => panic!(),
+    };
+
+    if let Err(err) = result {
+        eprintln!("{}", err);
+        for cause in err.chain().skip(1) {
+            eprintln!("詳細: {}", cause);
+        }
+
+        std::process::exit(1);
+    }
+
+    if name == "fixpage" {
+        let file_path = directory.join(PAGE_VERSION_FILE);
+        fs::write(&file_path, &format!("{}", page::CURRENT_PAGE_VERSION))
+            .await
+            .unwrap();
+    }
+
+    Ok(())
 }

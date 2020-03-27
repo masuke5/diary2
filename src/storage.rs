@@ -1,17 +1,17 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::fs::{DirEntry, File};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use uuid::Uuid;
-use chrono::{Date, DateTime, Datelike, Duration, Utc, Weekday};
 use anyhow::Result;
+use chrono::{Date, DateTime, Datelike, Duration, Utc, Weekday};
+use tokio::fs::{self, DirEntry};
+use tokio::stream::StreamExt;
+use uuid::Uuid;
 
-use crate::page::{Page, WeekPage, WeekPageV1};
 use crate::dropbox;
 use crate::dropbox::AccessToken;
+use crate::page::{Page, WeekPage, WeekPageV1};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct EditedEntries {
@@ -79,34 +79,34 @@ fn generate_page_filepath(directory: &Path, date: Date<Utc>) -> PathBuf {
     directory.join(PAGE_DIR).join(&filename)
 }
 
-fn get_edited_entries(directory: &Path) -> Result<EditedEntries> {
+async fn get_edited_entries(directory: &Path) -> Result<EditedEntries> {
     let file_path = directory.join(EDITED_ENTRIES_FILE);
 
     if file_path.exists() {
-        let file = File::open(&file_path)?;
-        let entries: EditedEntries = serde_json::from_reader(file)?;
+        let json = fs::read_to_string(&file_path).await?;
+        let entries: EditedEntries = serde_json::from_str(&json)?;
         Ok(entries)
     } else {
         Ok(EditedEntries::new())
     }
 }
 
-fn update_edited_entries<F>(directory: &Path, edit: F) -> Result<()>
+async fn update_edited_entries<F>(directory: &Path, edit: F) -> Result<()>
 where
     F: FnOnce(&mut EditedEntries),
 {
-    let mut entries = get_edited_entries(directory)?;
+    let mut entries = get_edited_entries(directory).await?;
 
     edit(&mut entries);
 
     let file_path = directory.join(EDITED_ENTRIES_FILE);
-    let file = File::create(&file_path)?;
-    serde_json::to_writer(file, &entries)?;
+    let json = serde_json::to_string(&entries)?;
+    fs::write(&file_path, json).await?;
 
     Ok(())
 }
 
-pub fn write(directory: &Path, page: Page) -> Result<()> {
+pub async fn write(directory: &Path, page: Page) -> Result<()> {
     let filepath = generate_page_filepath(directory, Utc::today());
 
     // なぜか追記される
@@ -119,8 +119,8 @@ pub fn write(directory: &Path, page: Page) -> Result<()> {
     let exists = filepath.exists();
     let mut week_page = if exists {
         // ファイルが存在したら今週のページを読み込む
-        let file = File::open(&filepath)?;
-        serde_json::from_reader(file)?
+        let json = fs::read_to_string(&filepath).await?;
+        serde_json::from_str(&json)?
     } else {
         // ファイルが存在しなかったらWeekPageを作成
         WeekPage::new()
@@ -146,51 +146,46 @@ pub fn write(directory: &Path, page: Page) -> Result<()> {
         entries
             .page_files
             .insert(filepath.file_name().unwrap().to_string_lossy().to_string());
-    })?;
+    })
+    .await?;
 
-    let file = File::create(&filepath)?;
-    serde_json::to_writer(file, &week_page)?;
+    let json = serde_json::to_string(&week_page)?;
+    fs::write(&filepath, &json).await?;
 
     Ok(())
 }
 
-pub fn write_image(
-    directory: &Path,
-    image_path: &Path,
-    file_name: &str,
-) -> Result<()> {
+pub async fn write_image(directory: &Path, image_path: &Path, file_name: &str) -> Result<()> {
     let dest = directory.join(IMAGE_DIR).join(file_name);
 
     update_edited_entries(directory, |entries| {
         entries
             .image_files
             .insert(dest.file_name().unwrap().to_string_lossy().to_string());
-    })?;
+    })
+    .await?;
 
-    fs::copy(image_path, dest)?;
+    fs::copy(image_path, dest).await?;
 
     Ok(())
 }
 
-pub fn list(directory: &Path, limit: u32) -> Result<Vec<Page>> {
-    list_with_filter(directory, limit, |_| true)
+pub async fn list(directory: &Path, limit: u32) -> Result<Vec<Page>> {
+    list_with_filter(directory, limit, |_| true).await
 }
 
-pub fn list_with_filter<F>(
-    directory: &Path,
-    limit: u32,
-    filter: F,
-) -> Result<Vec<Page>>
+pub async fn list_with_filter<F>(directory: &Path, limit: u32, filter: F) -> Result<Vec<Page>>
 where
     F: Fn(&Page) -> bool,
 {
     // ページが格納されているディレクトリのファイルをすべて取得する
-    let mut entries: Vec<DirEntry> = directory
-        .join(PAGE_DIR)
-        .read_dir()?
+    let mut entries: Vec<DirEntry> = fs::read_dir(directory.join(PAGE_DIR))
+        .await?
         .filter(|entry| entry.is_ok())
         .map(|entry| entry.unwrap())
-        .collect();
+        .collect()
+        .await;
+
     // ファイル名で降順にソート
     entries.sort_by_key(|entry| Reverse(entry.file_name()));
 
@@ -198,10 +193,11 @@ where
     let mut count = 0u32;
 
     'a: for entry in entries {
-        let file = File::open(entry.path())?;
+        let json = fs::read_to_string(entry.path()).await?;
 
-        let mut week_page: WeekPage = serde_json::from_reader(file)?;
+        let mut week_page: WeekPage = serde_json::from_str(&json)?;
         week_page.pages.sort_by_key(|page| Reverse(page.created_at));
+
         for page in week_page.pages {
             if count >= limit {
                 break 'a;
@@ -217,7 +213,7 @@ where
     Ok(pages)
 }
 
-pub fn get_week_page_range(
+pub async fn get_week_page_range(
     directory: &Path,
     start: &DateTime<Utc>,
     end: &DateTime<Utc>,
@@ -233,8 +229,8 @@ pub fn get_week_page_range(
 
     while date <= end {
         let file_path = generate_page_filepath(directory, date);
-        let file = File::open(&file_path)?;
-        let wpage: WeekPage = serde_json::from_reader(&file)?;
+        let json = fs::read_to_string(&file_path).await?;
+        let wpage: WeekPage = serde_json::from_str(&json)?;
         wpages.push(wpage);
 
         date = date + Duration::days(7);
@@ -244,8 +240,8 @@ pub fn get_week_page_range(
     let last_file_path = last_file_path.unwrap();
     let file_path = generate_page_filepath(directory, end);
     if last_file_path != file_path {
-        let file = File::open(&file_path)?;
-        let wpage: WeekPage = serde_json::from_reader(&file)?;
+        let json = fs::read_to_string(&file_path).await?;
+        let wpage: WeekPage = serde_json::from_str(&json)?;
         wpages.push(wpage);
     }
 
@@ -316,7 +312,7 @@ where
     Ok(result)
 }
 
-pub fn sync(
+pub async fn sync(
     directory: &Path,
     client: &reqwest::Client,
     access_token: &AccessToken,
@@ -324,7 +320,7 @@ pub fn sync(
     dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX)?;
     dropbox::create_folder(client, access_token, IMAGE_DIR_ON_DROPBOX)?;
 
-    let edited_entries = get_edited_entries(directory)?;
+    let edited_entries = get_edited_entries(directory).await?;
 
     // ページファイルを同期
 
@@ -352,15 +348,15 @@ pub fn sync(
 
                 let (_, content) = dropbox::download_file(client, access_token, &path_to_remote)?;
 
-                fs::write(&path_to_local, content)?;
+                fs::write(&path_to_local, content).await?;
             }
             // アップロード
             (true, false, true) => {
                 println!("{}をアップロードしています...", file_name);
 
                 // アップロード日時を更新してからJSONに変換
-                let file = File::open(&path_to_local)?;
-                let mut wpage: WeekPage = serde_json::from_reader(file)?;
+                let json = fs::read_to_string(&path_to_local).await?;
+                let mut wpage: WeekPage = serde_json::from_str(&json)?;
                 wpage.uploaded_at = Some(Utc::now());
 
                 let json = serde_json::to_string(&wpage)?;
@@ -373,8 +369,8 @@ pub fn sync(
                 println!("{}を更新しています...", file_name);
 
                 // ローカルのページを読み込む
-                let file = File::open(&path_to_local)?;
-                let wpage_on_local: WeekPage = serde_json::from_reader(file)?;
+                let json = fs::read_to_string(&path_to_local).await?;
+                let wpage_on_local: WeekPage = serde_json::from_str(&json)?;
 
                 // リモートのページを読み込む
                 let (_, content) =
@@ -388,7 +384,7 @@ pub fn sync(
                 let json = serde_json::to_string(&wpage)?;
 
                 // ローカルのファイルを更新
-                fs::write(&path_to_local, &json)?;
+                fs::write(&path_to_local, &json).await?;
 
                 // リモートのファイルを更新
                 dropbox::upload_file(client, access_token, &path_to_remote, json)?;
@@ -422,7 +418,7 @@ pub fn sync(
                 println!("{}をダウンロードしています...", file_name);
 
                 let (_, content) = dropbox::download_file(client, access_token, &path_to_remote)?;
-                fs::write(&path_to_local, content)?;
+                fs::write(&path_to_local, content).await?;
             }
             // ローカルの画像を優先する。
             // 選択できるようしてもよいかもしれない
@@ -431,7 +427,7 @@ pub fn sync(
             (true, false, true) => {
                 println!("{}をアップロードしています...", file_name);
 
-                let image = fs::read(&path_to_local)?;
+                let image = fs::read(&path_to_local).await?;
                 dropbox::upload_file(client, access_token, &path_to_remote, image)?;
             },
             (a, b, c) => unreachable!("({}, {}, {})", a, b, c),
@@ -439,7 +435,7 @@ pub fn sync(
     }
 
     // 更新済みリストを空にする
-    update_edited_entries(directory, EditedEntries::clear)?;
+    update_edited_entries(directory, EditedEntries::clear).await?;
 
     Ok(())
 }
@@ -464,18 +460,20 @@ fn generate_backup_dir_path_not_exists(base: &Path, prefix: &str) -> (PathBuf, u
     }
 }
 
-pub fn create_pages_backup(directory: &Path) -> Result<u32> {
+pub async fn create_pages_backup(directory: &Path) -> Result<u32> {
     let page_dir = directory.join(PAGE_DIR);
     let (backup_dir, id) = generate_backup_dir_path_not_exists(directory, BACKUP_DIR_PREFIX);
 
     // PAGE_DIR内のすべてのファイルをコピーする
-    fs::create_dir(&backup_dir)?;
-    for entry in fs::read_dir(&page_dir)? {
+    fs::create_dir(&backup_dir).await?;
+
+    let mut entries = fs::read_dir(&page_dir).await?;
+    while let Some(entry) = entries.next().await {
         let entry = entry?;
-        if let Ok(ft) = entry.file_type() {
+        if let Ok(ft) = entry.file_type().await {
             if ft.is_file() {
                 let to = backup_dir.join(entry.path().as_path().file_name().unwrap());
-                fs::copy(entry.path(), &to)?;
+                fs::copy(entry.path(), &to).await?;
             }
         }
     }
@@ -483,32 +481,33 @@ pub fn create_pages_backup(directory: &Path) -> Result<u32> {
     Ok(id)
 }
 
-pub fn rollback(directory: &Path, id: u32) -> Result<()> {
+pub async fn rollback(directory: &Path, id: u32) -> Result<()> {
     let page_dir = directory.join(PAGE_DIR);
     let backup_dir = generate_backup_dir_path(directory, BACKUP_DIR_PREFIX, id);
 
-    fs::remove_dir_all(&page_dir)?;
-    fs::create_dir(&page_dir)?;
+    fs::remove_dir_all(&page_dir).await?;
+    fs::create_dir(&page_dir).await?;
 
     // backup_dir内のすべてのファイルをコピーする
-    for entry in fs::read_dir(&backup_dir)? {
+    let mut entries = fs::read_dir(&backup_dir).await?;
+    while let Some(entry) = entries.next().await {
         let entry = entry?;
-        if let Ok(ft) = entry.file_type() {
+        if let Ok(ft) = entry.file_type().await {
             if ft.is_file() {
                 let to = page_dir.join(entry.path().as_path().file_name().unwrap());
-                fs::copy(entry.path(), &to)?;
+                fs::copy(entry.path(), &to).await?;
             }
         }
     }
 
-    remove_pages_backup(directory, id)?;
+    remove_pages_backup(directory, id).await?;
 
     Ok(())
 }
 
-pub fn remove_pages_backup(directory: &Path, id: u32) -> Result<()> {
+pub async fn remove_pages_backup(directory: &Path, id: u32) -> Result<()> {
     let backup_dir = generate_backup_dir_path(directory, BACKUP_DIR_PREFIX, id);
-    fs::remove_dir_all(backup_dir)?;
+    fs::remove_dir_all(backup_dir).await?;
 
     Ok(())
 }
@@ -535,7 +534,7 @@ fn convert_week_page_v1_to_v2(wpage: WeekPageV1) -> WeekPage {
     }
 }
 
-pub fn fix_1_to_2(directory: &Path) -> Result<()> {
+pub async fn fix_1_to_2(directory: &Path) -> Result<()> {
     // ページが格納されているディレクトリのファイルをすべて取得する
     let entries = directory
         .join(PAGE_DIR)
@@ -544,13 +543,12 @@ pub fn fix_1_to_2(directory: &Path) -> Result<()> {
         .map(|entry| entry.unwrap());
 
     for entry in entries {
-        let file = File::open(entry.path())?;
-        let wpage: WeekPageV1 = serde_json::from_reader(&file)?;
-        drop(file);
+        let json = fs::read_to_string(entry.path()).await?;
+        let wpage: WeekPageV1 = serde_json::from_str(&json)?;
 
         let wpage = convert_week_page_v1_to_v2(wpage);
-        let file = File::create(entry.path())?;
-        serde_json::to_writer(&file, &wpage)?;
+        let json = serde_json::to_string(&wpage)?;
+        fs::write(entry.path(), json).await?;
     }
 
     Ok(())
