@@ -647,8 +647,9 @@ pub async fn search(ctx: Context<'_>) -> Result<()> {
 }
 
 pub async fn auth(ctx: Context<'_>) -> Result<()> {
-    let access_token =
-        dropbox::get_access_token().context("アクセストークンの取得に失敗しました")?;
+    let access_token = dropbox::get_access_token()
+        .await
+        .context("アクセストークンの取得に失敗しました")?;
 
     let path = ctx.directory.join(ACCESS_TOKEN_FILE);
     fs::write(path, &access_token.value)

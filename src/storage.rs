@@ -317,14 +317,15 @@ pub async fn sync(
     client: &reqwest::Client,
     access_token: &AccessToken,
 ) -> Result<()> {
-    dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX)?;
-    dropbox::create_folder(client, access_token, IMAGE_DIR_ON_DROPBOX)?;
+    dropbox::create_folder(client, access_token, PAGES_DIR_ON_DROPBOX).await?;
+    dropbox::create_folder(client, access_token, IMAGE_DIR_ON_DROPBOX).await?;
 
     let edited_entries = get_edited_entries(directory).await?;
 
     // ページファイルを同期
 
-    let page_files_on_remote = dropbox::list_files(client, access_token, PAGES_DIR_ON_DROPBOX)?;
+    let page_files_on_remote =
+        dropbox::list_files(client, access_token, PAGES_DIR_ON_DROPBOX).await?;
 
     let page_dir = directory.join(PAGE_DIR);
     let file_map = get_file_map(
@@ -346,7 +347,8 @@ pub async fn sync(
             (false, true, false) => {
                 println!("{}をダウンロードしています...", file_name);
 
-                let (_, content) = dropbox::download_file(client, access_token, &path_to_remote)?;
+                let (_, content) =
+                    dropbox::download_file(client, access_token, &path_to_remote).await?;
 
                 fs::write(&path_to_local, content).await?;
             }
@@ -362,7 +364,7 @@ pub async fn sync(
                 let json = serde_json::to_string(&wpage)?;
 
                 // アップロード
-                dropbox::upload_file(client, access_token, &path_to_remote, json)?;
+                dropbox::upload_file(client, access_token, &path_to_remote, json).await?;
             }
             // 統合して双方を更新
             (true, true, true) => {
@@ -374,7 +376,7 @@ pub async fn sync(
 
                 // リモートのページを読み込む
                 let (_, content) =
-                    dropbox::download_file_to_string(client, access_token, &path_to_remote)?;
+                    dropbox::download_file_to_string(client, access_token, &path_to_remote).await?;
                 let wpage_on_remote = serde_json::from_str(&content)?;
 
                 // 統合して、アップロード日時を更新
@@ -387,7 +389,7 @@ pub async fn sync(
                 fs::write(&path_to_local, &json).await?;
 
                 // リモートのファイルを更新
-                dropbox::upload_file(client, access_token, &path_to_remote, json)?;
+                dropbox::upload_file(client, access_token, &path_to_remote, json).await?;
             }
             (a, b, c) => unreachable!("({}, {}, {})", a, b, c),
         }
@@ -395,7 +397,8 @@ pub async fn sync(
 
     // 画像ファイルを同期
 
-    let image_files_on_remote = dropbox::list_files(client, access_token, IMAGE_DIR_ON_DROPBOX)?;
+    let image_files_on_remote =
+        dropbox::list_files(client, access_token, IMAGE_DIR_ON_DROPBOX).await?;
 
     let image_dir = directory.join(IMAGE_DIR);
     let file_map = get_file_map(
@@ -417,7 +420,7 @@ pub async fn sync(
             (false, true, false) => {
                 println!("{}をダウンロードしています...", file_name);
 
-                let (_, content) = dropbox::download_file(client, access_token, &path_to_remote)?;
+                let (_, content) = dropbox::download_file(client, access_token, &path_to_remote).await?;
                 fs::write(&path_to_local, content).await?;
             }
             // ローカルの画像を優先する。
@@ -428,7 +431,7 @@ pub async fn sync(
                 println!("{}をアップロードしています...", file_name);
 
                 let image = fs::read(&path_to_local).await?;
-                dropbox::upload_file(client, access_token, &path_to_remote, image)?;
+                dropbox::upload_file(client, access_token, &path_to_remote, image).await?;
             },
             (a, b, c) => unreachable!("({}, {}, {})", a, b, c),
         }
