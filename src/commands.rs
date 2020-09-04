@@ -579,7 +579,7 @@ pub async fn amend(ctx: Context<'_>) -> Result<()> {
 }
 
 pub async fn search(ctx: Context<'_>) -> Result<()> {
-    let query = ctx.subcommand_matches.value_of("query").unwrap();
+    let query = ctx.subcommand_matches.value_of("query").unwrap_or("");
     let should_search_by_title_only = ctx.subcommand_matches.is_present("title");
     let should_search_by_text_only = ctx.subcommand_matches.is_present("text");
     let should_show_first_page = ctx.subcommand_matches.is_present("show-first");
